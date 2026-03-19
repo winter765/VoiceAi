@@ -106,6 +106,9 @@ void getAuthTokenFromNVS() {
 }
 
 void setupWiFi() {
+#ifdef DEV_MODE
+  WifiManager.addWifi("winter765", "joowing1234qwer");
+#endif
   WifiManager.startBackgroundTask(
       "ELATO-DEVICE"); // Run the background task to take care of our Wifi
   WifiManager.fallbackToSoftAp(
