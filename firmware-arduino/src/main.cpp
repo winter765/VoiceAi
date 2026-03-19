@@ -2,6 +2,8 @@
 #include "LEDHandler.h"
 #include "OTA.h"
 #include "WifiManager.h"
+#include "Audio.h"
+#include "Button.h"
 #include <driver/touch_sensor.h>
 
 #ifdef DISPLAY_ENABLED
@@ -101,6 +103,85 @@ static void onButtonDoubleClickCb(void *button_handle, void *usr_data) {
   Serial.println("Button double click");
   delay(10);
   sleepRequested = true;
+}
+
+// ---- Volume control callbacks ----
+static void saveVolumeToNVS(int vol) {
+  preferences.begin("audio", false);
+  preferences.putInt("volume", vol);
+  preferences.end();
+}
+
+static int loadVolumeFromNVS() {
+  preferences.begin("audio", true);
+  int vol = preferences.getInt("volume", 70);
+  preferences.end();
+  return vol;
+}
+
+static void applyVolume(int newVolume) {
+  if (newVolume > 100) newVolume = 100;
+  if (newVolume < 0) newVolume = 0;
+  currentVolume = newVolume;
+  volume.setVolume(currentVolume / 100.0f);
+  volumePitch.setVolume(currentVolume / 100.0f);
+  saveVolumeToNVS(currentVolume);
+  Serial.printf("Volume: %d\n", currentVolume);
+#ifdef DISPLAY_ENABLED
+  char buf[32];
+  snprintf(buf, sizeof(buf), "Volume: %d%%", currentVolume);
+  displaySetChatMessage("", buf);
+#endif
+}
+
+// Volume button polling task with debounce, short press and long press detection
+void volumeButtonTask(void *parameter) {
+  const unsigned long DEBOUNCE_MS = 50;
+  const unsigned long LONG_PRESS_MS = 800;
+
+  bool upPressed = false, downPressed = false;
+  unsigned long upPressTime = 0, downPressTime = 0;
+  bool upLongHandled = false, downLongHandled = false;
+
+  while (1) {
+    bool upState = digitalRead(VOLUME_UP_PIN) == LOW;
+    bool downState = digitalRead(VOLUME_DOWN_PIN) == LOW;
+    unsigned long now = millis();
+
+    // Volume Up button
+    if (upState && !upPressed) {
+      upPressed = true;
+      upPressTime = now;
+      upLongHandled = false;
+    } else if (upState && upPressed && !upLongHandled &&
+               (now - upPressTime >= LONG_PRESS_MS)) {
+      applyVolume(100);
+      upLongHandled = true;
+    } else if (!upState && upPressed) {
+      if (!upLongHandled && (now - upPressTime >= DEBOUNCE_MS)) {
+        applyVolume(currentVolume + 10);
+      }
+      upPressed = false;
+    }
+
+    // Volume Down button
+    if (downState && !downPressed) {
+      downPressed = true;
+      downPressTime = now;
+      downLongHandled = false;
+    } else if (downState && downPressed && !downLongHandled &&
+               (now - downPressTime >= LONG_PRESS_MS)) {
+      applyVolume(0);
+      downLongHandled = true;
+    } else if (!downState && downPressed) {
+      if (!downLongHandled && (now - downPressTime >= DEBOUNCE_MS)) {
+        applyVolume(currentVolume - 10);
+      }
+      downPressed = false;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
 }
 
 void getAuthTokenFromNVS() {
@@ -210,6 +291,11 @@ void setup() {
   btn->detachSingleClickEvent();
 #endif
 
+  // Load saved volume from NVS
+  currentVolume = loadVolumeFromNVS();
+  Serial.printf("Loaded volume from NVS: %d\n", currentVolume);
+
+
   // Pin audio tasks to Core 1 (application core)
   xTaskCreatePinnedToCore(ledTask,    // Function
                           "LED Task", // Name
@@ -249,6 +335,11 @@ void setup() {
                           1                // Core 1 (application core)
   );
 #endif
+
+  // Volume control buttons - init AFTER displayInit to avoid I2C pin conflict
+  pinMode(VOLUME_UP_PIN, INPUT_PULLUP);
+  pinMode(VOLUME_DOWN_PIN, INPUT_PULLUP);
+  xTaskCreate(volumeButtonTask, "Volume Task", 4096, NULL, 3, NULL);
 
   // Pin network task to Core 0 (protocol core)
   xTaskCreatePinnedToCore(networkTask,              // Function

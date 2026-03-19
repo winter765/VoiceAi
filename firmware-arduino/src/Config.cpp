@@ -85,6 +85,10 @@ const int I2S_SD_OUT = 10;
 
 const gpio_num_t BUTTON_PIN = GPIO_NUM_2; // Only RTC IO are allowed - ESP32 Pin example
 
+// Volume control buttons (matching bread-compact-wifi board)
+const gpio_num_t VOLUME_UP_PIN = GPIO_NUM_40;
+const gpio_num_t VOLUME_DOWN_PIN = GPIO_NUM_39;
+
 // Display pins (SSD1306 OLED via I2C)
 const int DISPLAY_SDA = 41;
 const int DISPLAY_SCL = 42;

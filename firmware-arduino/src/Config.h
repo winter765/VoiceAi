@@ -79,6 +79,10 @@ extern const int GREEN_LED_PIN;
 
 extern const gpio_num_t BUTTON_PIN;
 
+// Volume control buttons
+extern const gpio_num_t VOLUME_UP_PIN;
+extern const gpio_num_t VOLUME_DOWN_PIN;
+
 // I2S Microphone pins
 extern const int I2S_SD;
 extern const int I2S_WS;

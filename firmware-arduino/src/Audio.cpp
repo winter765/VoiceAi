@@ -152,6 +152,10 @@ void audioStreamTask(void *parameter) {
     vcfgPitch.allow_boost = true;
     volumePitch.begin(vcfgPitch);
 
+    // Apply saved volume from NVS (set during setup)
+    volume.setVolume(currentVolume / 100.0f);
+    volumePitch.setVolume(currentVolume / 100.0f);
+
     while (1) {
         if ( i2sOutputFlushScheduled) {
             i2sOutputFlushScheduled = false;
