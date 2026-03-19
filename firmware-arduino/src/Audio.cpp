@@ -2,6 +2,10 @@
 #include "Audio.h"
 #include "PitchShift.h"
 
+#ifdef DISPLAY_ENABLED
+#include "DisplayHandler.h"
+#endif
+
 // WEBSOCKET
 SemaphoreHandle_t wsMutex;
 WebSocketsClient webSocket;
@@ -330,6 +334,15 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
                 Serial.println("Received SESSION.END, going to sleep");
                 sleepRequested = true;
             }
+#ifdef DISPLAY_ENABLED
+            else if (strcmp((char*)msg.c_str(), "TRANSCRIPT.USER") == 0) {
+                const char *text = doc["text"] | "";
+                displaySetChatMessage("user", text);
+            } else if (strcmp((char*)msg.c_str(), "TRANSCRIPT.ASSISTANT") == 0) {
+                const char *text = doc["text"] | "";
+                displaySetChatMessage("assistant", text);
+            }
+#endif
         }
     }
         break;

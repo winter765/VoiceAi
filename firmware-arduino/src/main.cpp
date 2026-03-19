@@ -4,6 +4,10 @@
 #include "WifiManager.h"
 #include <driver/touch_sensor.h>
 
+#ifdef DISPLAY_ENABLED
+#include "DisplayHandler.h"
+#endif
+
 #define TOUCH_THRESHOLD 28000
 #define REQUIRED_RELEASE_CHECKS                                                \
   100 // how many consecutive times we need "below threshold" to confirm release
@@ -233,6 +237,18 @@ void setup() {
                           NULL,              // Handle
                           1                  // Core 1 (application core)
   );
+
+#ifdef DISPLAY_ENABLED
+  displayInit();
+  xTaskCreatePinnedToCore(displayTask,     // Function
+                          "Display Task",  // Name
+                          4096,            // Stack size
+                          NULL,            // Parameters
+                          2,               // Priority
+                          NULL,            // Handle
+                          1                // Core 1 (application core)
+  );
+#endif
 
   // Pin network task to Core 0 (protocol core)
   xTaskCreatePinnedToCore(networkTask,              // Function

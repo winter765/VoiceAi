@@ -269,6 +269,7 @@ export const connectToElevenLabs = async ({
 							event.user_transcription_event.user_transcript,
 							user,
 						);
+						ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.USER", text: event.user_transcription_event.user_transcript }));
 					}
 					break;
 
@@ -281,6 +282,7 @@ export const connectToElevenLabs = async ({
 							event.agent_response_event.agent_response,
 							user,
 						);
+						ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.ASSISTANT", text: event.agent_response_event.agent_response }));
 
 						console.log("Sending RESPONSE.COMPLETE to ESP32");
 						opus.flush(true);

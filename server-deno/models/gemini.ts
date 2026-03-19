@@ -150,6 +150,14 @@ export const connectToGemini = async ({
                     msg: "RESPONSE.COMPLETE",
                 }));
 
+                // Send transcripts to ESP32 display
+                if (inputTranscriptionText) {
+                    ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.USER", text: inputTranscriptionText }));
+                }
+                if (outputTranscriptionText) {
+                    ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.ASSISTANT", text: outputTranscriptionText }));
+                }
+
                 // Add user transcription to supabase
                 await addConversation(
                     supabase,

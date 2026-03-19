@@ -150,15 +150,18 @@ export const connectToUltravox = async ({
                     break;
 
                 case "transcript":
+                    console.log("Ultravox transcript:", event.role, "final:", event.final, "text:", event.text);
                     if (event.role === "agent" && event.final) {
                         outputTranscript = event.text || "";
                         if (outputTranscript) {
-                            await addConversation(supabase, "assistant", outputTranscript, user);
+                            ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.ASSISTANT", text: outputTranscript }));
+                            addConversation(supabase, "assistant", outputTranscript, user);
                         }
                     } else if (event.role === "user" && event.final) {
                         const userText = event.text || "";
                         if (userText) {
-                            await addConversation(supabase, "user", userText, user);
+                            ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.USER", text: userText }));
+                            addConversation(supabase, "user", userText, user);
                         }
                     }
                     break;

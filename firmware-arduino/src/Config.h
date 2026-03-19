@@ -92,6 +92,10 @@ extern const int I2S_DATA_OUT;
 extern const i2s_port_t I2S_PORT_OUT;
 extern const int I2S_SD_OUT;
 
+// Display pins (SSD1306 OLED via I2C)
+extern const int DISPLAY_SDA;
+extern const int DISPLAY_SCL;
+
 extern volatile bool sleepRequested;
 
 // SSL certificate

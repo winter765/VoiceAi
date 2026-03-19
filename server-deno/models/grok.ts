@@ -130,6 +130,7 @@ export const connectToGrok = async ({
                 case "conversation.item.input_audio_transcription.completed":
                     if (typeof event.transcript === "string" && event.transcript.length > 0) {
                         await addConversation(supabase, "user", event.transcript, user);
+                        ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.USER", text: event.transcript }));
                     }
                     break;
 
@@ -143,6 +144,7 @@ export const connectToGrok = async ({
 
                     if (outputTranscript) {
                         await addConversation(supabase, "assistant", outputTranscript, user);
+                        ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.ASSISTANT", text: outputTranscript }));
                         outputTranscript = "";
                     }
                     ws.send(JSON.stringify({ type: "server", msg: "RESPONSE.COMPLETE" }));

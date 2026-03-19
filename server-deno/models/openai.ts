@@ -106,6 +106,7 @@ export const connectToOpenAI = async ({
                 event.transcript,
                 user,
             );
+            ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.ASSISTANT", text: event.transcript }));
         } else if (event.type === "input_audio_buffer.committed") {
             ws.send(JSON.stringify({ type: "server", msg: "AUDIO.COMMITTED" }));
         }
@@ -185,6 +186,7 @@ export const connectToOpenAI = async ({
                             event.transcript,
                             user,
                         );
+                        ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.USER", text: event.transcript }));
                         break;
                 }
             } catch (error) {

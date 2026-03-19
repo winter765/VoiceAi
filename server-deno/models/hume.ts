@@ -97,6 +97,7 @@ export const connectToHume = ({
                         assistantMsg.message.content,
                         user,
                     );
+                    ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.ASSISTANT", text: assistantMsg.message.content }));
                     break;
 
                 case "audio_output":
@@ -165,6 +166,7 @@ export const connectToHume = ({
                         message.message.content,
                         user,
                     );
+                    ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.USER", text: message.message.content }));
                     break;
 
                 case "user_input":
