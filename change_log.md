@@ -1,5 +1,17 @@
 # Change Log
 
+## 2026-03-21
+
+### server-deno
+
+#### 配置Ultravox自定义克隆音色
+- 使用 Demucs 从玩具公司提供的语音样本（voice_01.wav）中分离出纯人声
+- 通过 Ultravox Voice Cloning API 上传人声样本，创建自定义音色 ToyVoice01（voiceId: `e5db1933-b931-47d8-928f-0758535d3f4c`）
+- `models/ultravox.ts` 中 voice 从默认 "Mark" 改为克隆音色 ID
+- 底层 TTS 引擎：ElevenLabs eleven_turbo_v2_5
+
+---
+
 ## 2026-03-20
 
 ### firmware-arduino
