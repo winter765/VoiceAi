@@ -71,7 +71,7 @@ export const connectToUltravox = async ({
         throw new Error("ULTRAVOX_API_KEY is not set");
     }
 
-    const voice = "Mark"; // TODO: add ultravox_voice field to personality
+    const voice = "e5db1933-b931-47d8-928f-0758535d3f4c"; // ToyVoice01 - 玩具公司指定音色
     let opusPacketsSent = 0;
     const opus = createOpusPacketizer((packet) => {
         opusPacketsSent++;
