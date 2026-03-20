@@ -19,6 +19,7 @@ import { connectToElevenLabs } from "./models/elevenlabs.ts";
 import { connectToHume } from "./models/hume.ts";
 import { connectToGrok } from "./models/grok.ts";
 import { connectToUltravox } from "./models/ultravox.ts";
+import { connectToEcho } from "./models/echo.ts";
 
 const server = createServer();
 
@@ -34,15 +35,7 @@ wss.on('headers', (headers, req) => {
 wss.on("connection", async (ws: WSWebSocket, payload: IPayload) => {
     const { user, supabase } = payload;
 
-    let connectionPcmFile: Deno.FsFile | null = null;
-    if (isDev) {
-        const filename = `debug_audio_${Date.now()}.pcm`;
-        connectionPcmFile = await Deno.open(filename, {
-            create: true,
-            write: true,
-            append: true,
-        });
-    }
+    const connectionPcmFile: Deno.FsFile | null = null;
 
     const chatHistory = await getChatHistory(
         supabase,
@@ -60,7 +53,7 @@ wss.on("connection", async (ws: WSWebSocket, payload: IPayload) => {
     ws.send(
         JSON.stringify({
             type: "auth",
-            volume_control: user.device?.volume ?? 50,
+            volume_control: user.device?.volume ?? 100,
             is_ota: user.device?.is_ota ?? false,
             is_reset: user.device?.is_reset ?? false,
             pitch_factor: user.personality?.pitch_factor ?? 1,

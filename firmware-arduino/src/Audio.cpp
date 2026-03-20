@@ -21,7 +21,7 @@ unsigned long scheduledTime = 0;
 unsigned long speakingStartTime = 0;
 
 // AUDIO SETTINGS
-int currentVolume = 70;
+int currentVolume = 100;
 float currentPitchFactor = 1.0f;
 const int CHANNELS = 1;         // Mono
 const int BITS_PER_SAMPLE = 16; // 16-bit audio
@@ -56,14 +56,19 @@ OpusAudioDecoder opusDecoder;  //access guarded by wsmutex
 BufferRTOS<uint8_t> audioBuffer(AUDIO_BUFFER_SIZE, AUDIO_CHUNK_SIZE);  //producer: networkTask, consumer: audioStreamTask. Thread safe in single producer->single consumer scenario.
 I2SStream i2s; //access from audioStreamTask only
 
-// OLD with no pitch shift
-VolumeStream volume(i2s); //access from audioStreamTask only
-QueueStream<uint8_t> queue(audioBuffer); //access from audioStreamTask only
+// 16→32 bit conversion buffers (matching xiaozhi: I2S TX uses 32-bit data width)
+static const int SPK_COPY_SAMPLES = 240;  // match xiaozhi DMA frame num
+static int16_t spkBuf16[SPK_COPY_SAMPLES];
+static int32_t spkBuf32[SPK_COPY_SAMPLES * 2];  // stereo: 2 channels
+
+// Keep legacy objects for compatibility (unused in new manual pipeline)
+VolumeStream volume(i2s);
+QueueStream<uint8_t> queue(audioBuffer);
 StreamCopy copier(volume, queue);
 
-// NEW for pitch shift (lossy)
+// Pitch shift (lossy) - TODO: re-integrate with 32-bit output
 PitchShiftFixedOutput pitchShift(i2s);
-VolumeStream volumePitch(pitchShift); //access from audioStreamTask only
+VolumeStream volumePitch(pitchShift);
 StreamCopy pitchCopier(volumePitch, queue);
 
 AudioInfo info(SAMPLE_RATE, CHANNELS, BITS_PER_SAMPLE);
@@ -83,7 +88,7 @@ void transitionToSpeaking() {
     i2sInputFlushScheduled = true;
     
     deviceState = SPEAKING;
-    digitalWrite(I2S_SD_OUT, HIGH);
+    // digitalWrite(I2S_SD_OUT, HIGH);  // disabled - xiaozhi has no PA pin
     speakingStartTime = millis();
     
     // webSocket.enableHeartbeat(30000, 15000, 3);
@@ -104,20 +109,19 @@ void transitionToListening() {
     Serial.println("Transitioned to listening mode");
 
     deviceState = LISTENING;
-    digitalWrite(I2S_SD_OUT, LOW);
+    // digitalWrite(I2S_SD_OUT, LOW);  // disabled - xiaozhi has no PA pin
     // webSocket.disableHeartbeat();
 }
 
-// audioStreamTask -> copier.copy() (conditional on webSocket.isConnected())
+// audioStreamTask: manual 16→32 bit pipeline matching xiaozhi bread-compact-wifi
 void audioStreamTask(void *parameter) {
-    Serial.println("Starting I2S stream pipeline...");
-    
-    pinMode(I2S_SD_OUT, OUTPUT);
+    Serial.println("[SPK] Starting I2S output (ESP-IDF legacy driver, 32-bit)...");
 
+    // Opus decoder outputs 16-bit PCM into audioBuffer
     OpusSettings cfg;
     cfg.sample_rate = SAMPLE_RATE;
     cfg.channels = CHANNELS;
-    cfg.bits_per_sample = BITS_PER_SAMPLE;
+    cfg.bits_per_sample = BITS_PER_SAMPLE;  // 16-bit decode
     cfg.max_buffer_size = 6144;
 
     xSemaphoreTake(wsMutex, portMAX_DELAY);
@@ -126,57 +130,82 @@ void audioStreamTask(void *parameter) {
     xSemaphoreGive(wsMutex);
 
     audioBuffer.setReadMaxWait(0);
-    
-    queue.begin();
 
-    auto config = i2s.defaultConfig(TX_MODE);
-    config.bits_per_sample = BITS_PER_SAMPLE;
-    config.sample_rate = SAMPLE_RATE;
-    config.channels = CHANNELS;
-    config.pin_bck = I2S_BCK_OUT;
-    config.pin_ws = I2S_WS_OUT;
-    config.pin_data = I2S_DATA_OUT;
-    config.port_no = I2S_PORT_OUT;
+    // === Configure I2S directly via ESP-IDF legacy API (bypass AudioTools) ===
+    Serial.printf("[SPK] I2S pins: BCK=%d, WS=%d, DATA=%d, PORT=%d\n",
+        I2S_BCK_OUT, I2S_WS_OUT, I2S_DATA_OUT, I2S_PORT_OUT);
 
-    config.copyFrom(info);  
-    i2s.begin(config);  
+    i2s_config_t i2s_config = {};
+    i2s_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
+    i2s_config.sample_rate = SAMPLE_RATE;                    // 24000
+    i2s_config.bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT;  // 32-bit (matching xiaozhi)
+    i2s_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;   // standard stereo
+    i2s_config.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+    i2s_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
+    i2s_config.dma_buf_count = 6;       // matching xiaozhi DMA_DESC_NUM
+    i2s_config.dma_buf_len = 240;       // matching xiaozhi DMA_FRAME_NUM
+    i2s_config.use_apll = false;
+    i2s_config.tx_desc_auto_clear = true;
 
-    // Initialize both volume streams once
-    auto vcfg = volume.defaultConfig();
-    vcfg.copyFrom(info);
-    vcfg.allow_boost = true;
-    volume.begin(vcfg);
-    
-    auto vcfgPitch = volumePitch.defaultConfig();
-    vcfgPitch.copyFrom(info);
-    vcfgPitch.allow_boost = true;
-    volumePitch.begin(vcfgPitch);
+    esp_err_t err = i2s_driver_install(I2S_PORT_OUT, &i2s_config, 0, NULL);
+    Serial.printf("[SPK] i2s_driver_install: %s\n", esp_err_to_name(err));
 
-    // Apply saved volume from NVS (set during setup)
-    volume.setVolume(currentVolume / 100.0f);
-    volumePitch.setVolume(currentVolume / 100.0f);
+    i2s_pin_config_t pin_config = {};
+    pin_config.mck_io_num = I2S_PIN_NO_CHANGE;  // no MCLK needed
+    pin_config.bck_io_num = I2S_BCK_OUT;
+    pin_config.ws_io_num = I2S_WS_OUT;
+    pin_config.data_out_num = I2S_DATA_OUT;
+    pin_config.data_in_num = I2S_PIN_NO_CHANGE;
 
+    err = i2s_set_pin(I2S_PORT_OUT, &pin_config);
+    Serial.printf("[SPK] i2s_set_pin: %s\n", esp_err_to_name(err));
+
+    i2s_zero_dma_buffer(I2S_PORT_OUT);
+
+    err = i2s_start(I2S_PORT_OUT);
+    Serial.printf("[SPK] i2s_start: %s\n", esp_err_to_name(err));
+
+    Serial.println("[SPK] I2S TX ready: 32-bit, 24kHz, stereo frame (legacy driver)");
+
+    // === Main loop: read 16-bit PCM from audioBuffer, convert to 32-bit stereo, write to I2S ===
     while (1) {
-        if ( i2sOutputFlushScheduled) {
+        if (i2sOutputFlushScheduled) {
             i2sOutputFlushScheduled = false;
-            i2s.flush();
-            volume.flush();
-            volumePitch.flush();
-            queue.flush();
+            audioBuffer.reset();
+            i2s_zero_dma_buffer(I2S_PORT_OUT);
+            Serial.println("[SPK] Output flushed");
         }
 
-        if (webSocket.isConnected() && deviceState == SPEAKING) {
-            if (currentPitchFactor != 1.0f) {
-                pitchCopier.copy();
-            } else {
-                copier.copy();
+        if (deviceState == SPEAKING && audioBuffer.available() > 0) {
+            // Read 16-bit mono PCM samples from audioBuffer
+            size_t bytesRead = audioBuffer.readArray((uint8_t*)spkBuf16, SPK_COPY_SAMPLES * sizeof(int16_t));
+            int samplesRead = bytesRead / sizeof(int16_t);
+
+            if (samplesRead > 0) {
+                // Apply volume (quadratic scaling, matching xiaozhi)
+                // currentVolume: 0-100, convert to 0.0-1.0 scale
+                float volScale = (float)currentVolume / 100.0f;
+                volScale = volScale * volScale;  // quadratic for perceptual loudness
+
+                // Convert 16-bit mono → 32-bit stereo (left+right same data)
+                for (int i = 0; i < samplesRead; i++) {
+                    int32_t sample = (int32_t)(spkBuf16[i] * volScale);
+                    // Clamp to 16-bit range before shifting to 32-bit
+                    if (sample > 32767) sample = 32767;
+                    if (sample < -32768) sample = -32768;
+                    int32_t sample32 = sample << 16;  // 16-bit → upper 16 bits of 32-bit
+                    spkBuf32[i * 2] = sample32;       // left channel
+                    spkBuf32[i * 2 + 1] = sample32;   // right channel (duplicate mono)
+                }
+
+                size_t bytes_written = 0;
+                i2s_write(I2S_PORT_OUT, spkBuf32, samplesRead * 2 * sizeof(int32_t), &bytes_written, portMAX_DELAY);
             }
+
+            vTaskDelay(1);
+        } else {
+            vTaskDelay(10);
         }
-        else {
-            //we should always read from audioBuffer, otherwise writing thread can stuck
-            queue.read();
-        }
-        vTaskDelay(1); 
     }
 }
 
@@ -210,26 +239,28 @@ public:
 
 WebsocketStream wsStream; //guard with wsMutex
 I2SStream i2sInput; //access from micTask only
-StreamCopy micToWsCopier(wsStream, i2sInput);
 volatile bool i2sInputFlushScheduled = false;
-const int MIC_COPY_SIZE = 64;
+
+// Read 32-bit I2S samples, convert to 16-bit (matching xiaozhi approach)
+const int MIC_READ_SAMPLES = 160; // 160 samples = 10ms at 16kHz
+static int32_t mic_buf_32[MIC_READ_SAMPLES];
+static int16_t mic_buf_16[MIC_READ_SAMPLES];
 
 void micTask(void *parameter) {
-    // Configure and start I2S input stream.
+    Serial.println("[MIC] Initializing I2S input...");
+
+    // Configure I2S input as 32-bit (mic outputs 24-bit data in 32-bit frame)
     auto i2sConfig = i2sInput.defaultConfig(RX_MODE);
-    i2sConfig.bits_per_sample = BITS_PER_SAMPLE;
+    i2sConfig.bits_per_sample = 32;  // Read 32-bit from mic
     i2sConfig.sample_rate = MIC_SAMPLE_RATE;
     i2sConfig.channels = CHANNELS;
-    i2sConfig.i2s_format = I2S_LEFT_JUSTIFIED_FORMAT;
+    i2sConfig.i2s_format = I2S_STD_FORMAT;
     i2sConfig.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;
-    // Configure your I2S input pins appropriately here:
     i2sConfig.pin_bck = I2S_SCK;
     i2sConfig.pin_ws  = I2S_WS;
     i2sConfig.pin_data = I2S_SD;
     i2sConfig.port_no = I2S_PORT_IN;
     i2sInput.begin(i2sConfig);
-
-    micToWsCopier.setDelayOnNoData(0);
 
     while (1) {
         if (i2sInputFlushScheduled) {
@@ -238,10 +269,28 @@ void micTask(void *parameter) {
         }
 
         if (deviceState == LISTENING && webSocket.isConnected()) {
-            // Use smaller chunk size to avoid blocking too long
-            micToWsCopier.copyBytes(MIC_COPY_SIZE);
-            
-            // Yield more frequently
+            // Read 32-bit samples from I2S
+            size_t bytesRead = i2sInput.readBytes((uint8_t*)mic_buf_32, MIC_READ_SAMPLES * sizeof(int32_t));
+            int samplesRead = bytesRead / sizeof(int32_t);
+
+            if (samplesRead > 0) {
+                // Convert 32-bit to 16-bit (right shift 12 bits, matching xiaozhi)
+                for (int i = 0; i < samplesRead; i++) {
+                    int32_t val = mic_buf_32[i] >> 12;
+                    if (val > 32767) val = 32767;
+                    if (val < -32768) val = -32768;
+                    mic_buf_16[i] = (int16_t)val;
+                }
+
+                // Send 16-bit PCM via WebSocket
+                size_t sendBytes = samplesRead * sizeof(int16_t);
+                xSemaphoreTake(wsMutex, portMAX_DELAY);
+                if (webSocket.isConnected() && deviceState == LISTENING) {
+                    webSocket.sendBIN((uint8_t*)mic_buf_16, sendBytes);
+                }
+                xSemaphoreGive(wsMutex);
+            }
+
             vTaskDelay(1);
         } else {
             vTaskDelay(10);
@@ -287,18 +336,8 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
             bool is_ota = doc["is_ota"].as<bool>();
             bool is_reset = doc["is_reset"].as<bool>();
 
-            // Update volumes on both streams
-            volume.setVolume(currentVolume / 100.0f);
-            volumePitch.setVolume(currentVolume / 100.0f);
-            
-            // Only initialize pitch shift if needed
-            if (currentPitchFactor != 1.0f) {
-                auto pcfg = pitchShift.defaultConfig();
-                pcfg.copyFrom(info);
-                pcfg.pitch_shift = currentPitchFactor;
-                pcfg.buffer_size = 512;
-                pitchShift.begin(pcfg);
-            }
+            // Volume is applied directly in audioStreamTask 16→32 bit conversion
+            Serial.printf("[AUTH] Volume=%d, PitchFactor=%.2f\n", currentVolume, currentPitchFactor);
 
             if (is_ota) {
                 Serial.println("OTA update received");
@@ -323,8 +362,8 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
 
                 // Check if volume_control is included in the message
                 if (doc.containsKey("volume_control")) {
-                    int newVolume = doc["volume_control"].as<int>();
-                    volume.setVolume(newVolume / 100.0f);
+                    currentVolume = doc["volume_control"].as<int>();
+                    Serial.printf("[VOL] Updated volume to %d\n", currentVolume);
                 }
 
                 scheduleListeningRestart = true;
@@ -358,7 +397,13 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         }
 
         // Otherwise process the audio data normally
+        static int binCount = 0;
+        binCount++;
         size_t processed = opusDecoder.write(payload, length);
+        if (binCount % 20 == 1) {
+            Serial.printf("[OPUS] pkt#%d in=%d processed=%d bufAvail=%d\n",
+                binCount, length, processed, audioBuffer.available());
+        }
         if (processed != length) {
             Serial.printf("Warning: Only processed %d/%d bytes\n", processed, length);
         }

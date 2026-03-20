@@ -114,7 +114,7 @@ static void saveVolumeToNVS(int vol) {
 
 static int loadVolumeFromNVS() {
   preferences.begin("audio", true);
-  int vol = preferences.getInt("volume", 70);
+  int vol = preferences.getInt("volume", 100);
   preferences.end();
   return vol;
 }
@@ -123,8 +123,6 @@ static void applyVolume(int newVolume) {
   if (newVolume > 100) newVolume = 100;
   if (newVolume < 0) newVolume = 0;
   currentVolume = newVolume;
-  volume.setVolume(currentVolume / 100.0f);
-  volumePitch.setVolume(currentVolume / 100.0f);
   saveVolumeToNVS(currentVolume);
   Serial.printf("Volume: %d\n", currentVolume);
 #ifdef DISPLAY_ENABLED
@@ -271,7 +269,7 @@ void setupDeviceMetadata() {
 }
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(921600);
   delay(500);
 
   // SETUP

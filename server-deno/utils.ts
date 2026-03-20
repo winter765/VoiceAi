@@ -14,7 +14,7 @@ export const defaultGrokVoice = "Ara";
 // Define your audio parameters
 export const SAMPLE_RATE = 24000; // For example, 24000 Hz
 const CHANNELS = 1; // Mono (set to 2 if you have stereo)
-const FRAME_DURATION = 120; // Frame length in ms
+const FRAME_DURATION = 20; // Frame length in ms (20ms is standard, widely supported)
 const BYTES_PER_SAMPLE = 2; // 16-bit PCM: 2 bytes per sample
 const FRAME_SIZE = (SAMPLE_RATE * FRAME_DURATION / 1000) * CHANNELS *
     BYTES_PER_SAMPLE; // 960 bytes for 24000 Hz mono 16-bit

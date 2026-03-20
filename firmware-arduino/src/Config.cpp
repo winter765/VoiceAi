@@ -74,14 +74,14 @@ const int BLUE_LED_PIN = 13;
 const int RED_LED_PIN = 9;
 const int GREEN_LED_PIN = 8;
 
-const int I2S_SD = 14;
-const int I2S_WS = 4;
-const int I2S_SCK = 1;
+const int I2S_SD = 6;    // MIC DATA (bread-compact-wifi: GPIO 6)
+const int I2S_WS = 4;    // MIC WS   (bread-compact-wifi: GPIO 4)
+const int I2S_SCK = 5;   // MIC SCK  (bread-compact-wifi: GPIO 5)
 
-const int I2S_WS_OUT = 5;
-const int I2S_BCK_OUT = 6;
-const int I2S_DATA_OUT = 7;
-const int I2S_SD_OUT = 10;
+const int I2S_WS_OUT = 16;    // SPK LRCK (bread-compact-wifi: GPIO 16)
+const int I2S_BCK_OUT = 15;   // SPK BCLK (bread-compact-wifi: GPIO 15)
+const int I2S_DATA_OUT = 7;   // SPK DOUT (bread-compact-wifi: GPIO 7)
+const int I2S_SD_OUT = 10;    // SPK SD/Enable
 
 const gpio_num_t BUTTON_PIN = GPIO_NUM_2; // Only RTC IO are allowed - ESP32 Pin example
 

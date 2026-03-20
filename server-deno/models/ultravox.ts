@@ -72,7 +72,14 @@ export const connectToUltravox = async ({
     }
 
     const voice = "Mark"; // TODO: add ultravox_voice field to personality
-    const opus = createOpusPacketizer((packet) => ws.send(packet));
+    let opusPacketsSent = 0;
+    const opus = createOpusPacketizer((packet) => {
+        opusPacketsSent++;
+        if (opusPacketsSent % 10 === 1) {
+            console.log(`[DEBUG] Opus→ESP32: packet #${opusPacketsSent}, size=${packet.length}B`);
+        }
+        ws.send(packet);
+    });
 
     // Step 1: Create call via REST API
     console.log("Creating Ultravox call...");
@@ -95,6 +102,7 @@ export const connectToUltravox = async ({
     let outputTranscript = "";
 
     const sendResponseCreated = async () => {
+        console.log("[DEBUG] Sending RESPONSE.CREATED to ESP32");
         try {
             const device = await getDeviceInfo(supabase, user.user_id);
             opus.reset();
@@ -123,12 +131,19 @@ export const connectToUltravox = async ({
         }
     });
 
+    let uvAudioChunks = 0;
+    let uvAudioBytes = 0;
     uvWs.on("message", async (data: Buffer, isBinary: boolean) => {
         // Binary data = audio output from Ultravox
         if (isBinary) {
+            uvAudioChunks++;
+            uvAudioBytes += data.length;
+            if (uvAudioChunks % 20 === 1) {
+                console.log(`[DEBUG] Ultravox→Server audio: chunk #${uvAudioChunks}, size=${data.length}B, total=${uvAudioBytes}B, opusBuffered=${opus.bufferedBytes()}B`);
+            }
             if (!createdSent) {
+                createdSent = true; // Set flag BEFORE async call to prevent race condition
                 await sendResponseCreated();
-                createdSent = true;
             }
             // PCM 16-bit LE audio at 24kHz - encode to Opus and send to ESP32
             opus.push(data);
@@ -147,6 +162,14 @@ export const connectToUltravox = async ({
             switch (event.type) {
                 case "state":
                     console.log("Ultravox state:", event.state);
+                    // If Ultravox transitions to listening, treat it as audio done
+                    if (event.state === "listening" && createdSent) {
+                        console.log("[DEBUG] state→listening with createdSent=true → sending RESPONSE.COMPLETE");
+                        opus.flush(true);
+                        ws.send(JSON.stringify({ type: "server", msg: "RESPONSE.COMPLETE" }));
+                        createdSent = false;
+                        outputTranscript = "";
+                    }
                     break;
 
                 case "transcript":
@@ -167,6 +190,7 @@ export const connectToUltravox = async ({
                     break;
 
                 case "agent_audio_done":
+                    console.log("[DEBUG] agent_audio_done → sending RESPONSE.COMPLETE to ESP32");
                     opus.flush(true);
                     ws.send(JSON.stringify({ type: "server", msg: "RESPONSE.COMPLETE" }));
                     createdSent = false;
@@ -174,6 +198,7 @@ export const connectToUltravox = async ({
                     break;
 
                 case "user_speech_started":
+                    console.log("[DEBUG] user_speech_started → sending AUDIO.COMMITTED to ESP32");
                     ws.send(JSON.stringify({ type: "server", msg: "AUDIO.COMMITTED" }));
                     break;
 
@@ -207,8 +232,15 @@ export const connectToUltravox = async ({
     });
 
     // Handle messages from ESP32
+    let audioPacketCount = 0;
+    let totalAudioBytes = 0;
     const messageHandler = (data: RawData, isBinary: boolean) => {
         if (isBinary) {
+            audioPacketCount++;
+            totalAudioBytes += (data as Buffer).length;
+            if (audioPacketCount % 100 === 1) {
+                console.log(`[DEBUG] ESP32 audio: packet #${audioPacketCount}, this=${(data as Buffer).length}B, total=${totalAudioBytes}B`);
+            }
             // Forward raw PCM audio to Ultravox as binary
             uvWs.send(data as Buffer);
 
@@ -236,7 +268,11 @@ export const connectToUltravox = async ({
     };
 
     ws.on("message", (data: RawData, isBinary: boolean) => {
+        if (isDev && !isBinary) {
+            console.log(`[DEBUG] ESP32 text message:`, (data as Buffer).toString("utf-8"));
+        }
         if (!isConnected) {
+            console.log(`[DEBUG] Ultravox not connected yet, queuing message (binary=${isBinary}, size=${(data as Buffer).length})`);
             messageQueue.push(data);
         } else {
             messageHandler(data, isBinary);
@@ -250,6 +286,7 @@ export const connectToUltravox = async ({
 
     ws.on("close", async (code: number, reason: string) => {
         console.log(`ESP32 WebSocket closed with code ${code}, reason: ${reason}`);
+        console.log(`[DEBUG] Audio summary: ${audioPacketCount} packets, ${totalAudioBytes} bytes total`);
         await closeHandler();
         opus.close();
         uvWs.close();
