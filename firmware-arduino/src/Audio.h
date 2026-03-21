@@ -54,4 +54,9 @@ void audioStreamTask(void *parameter);
 // AUDIO INPUT
 void micTask(void *parameter);
 
+// STATE CONTROL
+void transitionToListening();
+void toggleChatState();
+extern volatile bool chatToggleRequested;
+
 #endif

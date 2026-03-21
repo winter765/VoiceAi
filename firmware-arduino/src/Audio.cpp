@@ -16,6 +16,7 @@ TaskHandle_t micTaskHandle = NULL;
 TaskHandle_t networkTaskHandle = NULL;
 
 // TIMING REGISTERS
+volatile bool chatToggleRequested = false;
 volatile bool scheduleListeningRestart = false;
 unsigned long scheduledTime = 0;
 unsigned long speakingStartTime = 0;
@@ -310,7 +311,7 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         break;
     case WStype_CONNECTED:
         Serial.printf("[WSc] Connected to url: %s\n", payload);
-        deviceState = PROCESSING;
+        deviceState = IDLE;  // Stay IDLE until user presses button to START_SESSION
         break;
     case WStype_TEXT:
     {
@@ -350,6 +351,7 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
                 // setFactoryResetStatusInNVS(true);
                 ESP.restart();
             }
+
         }
 
         // oai messages
@@ -392,7 +394,6 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
     case WStype_BIN:
     {
         if (scheduleListeningRestart || deviceState != SPEAKING) {
-            Serial.println("Skipping audio data due to touch interrupt.");
             break;
         }
 
@@ -446,6 +447,45 @@ void websocketSetup(const String& server_domain, int port, const String& path)
     #endif
 
     xSemaphoreGive(wsMutex);
+}
+
+// Toggle chat state: IDLE/PROCESSING → LISTENING, LISTENING → IDLE, SPEAKING → interrupt
+// Sends START_SESSION / STOP_SESSION instructions to Server for on-demand Ultravox call management
+void toggleChatState() {
+    Serial.printf("[CHAT] toggleChatState, current state: %d\n", deviceState);
+    switch (deviceState) {
+        case IDLE:
+        case PROCESSING:
+            if (webSocket.isConnected()) {
+                Serial.println("[CHAT] Sending START_SESSION to server");
+                xSemaphoreTake(wsMutex, portMAX_DELAY);
+                webSocket.sendTXT("{\"type\":\"instruction\",\"msg\":\"START_SESSION\"}");
+                xSemaphoreGive(wsMutex);
+                transitionToListening();
+            } else {
+                Serial.println("[CHAT] WebSocket not connected, cannot start listening");
+            }
+            break;
+        case LISTENING:
+            Serial.println("[CHAT] Sending STOP_SESSION, back to IDLE");
+            xSemaphoreTake(wsMutex, portMAX_DELAY);
+            webSocket.sendTXT("{\"type\":\"instruction\",\"msg\":\"STOP_SESSION\"}");
+            xSemaphoreGive(wsMutex);
+            deviceState = IDLE;
+            break;
+        case SPEAKING:
+            Serial.println("[CHAT] Interrupting speech, sending STOP_SESSION");
+            xSemaphoreTake(wsMutex, portMAX_DELAY);
+            webSocket.sendTXT("{\"type\":\"instruction\",\"msg\":\"STOP_SESSION\"}");
+            xSemaphoreGive(wsMutex);
+            scheduleListeningRestart = false;
+            i2sOutputFlushScheduled = true;
+            deviceState = IDLE;
+            break;
+        default:
+            Serial.printf("[CHAT] Ignoring toggle in state %d\n", deviceState);
+            break;
+    }
 }
 
 // networkTask -> webSocket.loop()

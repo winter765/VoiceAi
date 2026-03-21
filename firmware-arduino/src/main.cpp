@@ -99,10 +99,11 @@ static void onButtonLongPressUpEventCb(void *button_handle, void *usr_data) {
   sleepRequested = true;
 }
 
-static void onButtonDoubleClickCb(void *button_handle, void *usr_data) {
-  Serial.println("Button double click");
-  delay(10);
-  sleepRequested = true;
+// 双击已移除，避免影响单击检测速度
+
+static void onButtonSingleClickCb(void *button_handle, void *usr_data) {
+  Serial.println("Button single click -> toggle chat");
+  chatToggleRequested = true;
 }
 
 // ---- Volume control callbacks ----
@@ -216,37 +217,45 @@ void touchTask(void *parameter) {
   bool touched = false;
   unsigned long pressStartTime = 0;
   unsigned long lastTouchTime = 0;
-  const unsigned long LONG_PRESS_DURATION = 500; // 500ms for long press
+  bool longPressHandled = false;
+  const unsigned long LONG_PRESS_DURATION = 1000; // 1s for long press (sleep)
+  const unsigned long SHORT_PRESS_MAX = 500;      // <500ms = short press (toggle chat)
 
   while (1) {
-    // Read the touch sensor
     uint32_t touchValue = touchRead(TOUCH_PAD_NUM2);
     bool isTouched = (touchValue > TOUCH_THRESHOLD);
     unsigned long currentTime = millis();
 
-    // Initial touch detection
+    // Touch start
     if (isTouched && !touched &&
         (currentTime - lastTouchTime > TOUCH_DEBOUNCE_DELAY)) {
       touched = true;
-      pressStartTime = currentTime; // Start timing the press
+      pressStartTime = currentTime;
       lastTouchTime = currentTime;
+      longPressHandled = false;
     }
 
-    // Check for long press while touched
-    if (touched && isTouched) {
+    // Long press detection (while still touching)
+    if (touched && isTouched && !longPressHandled) {
       if (currentTime - pressStartTime >= LONG_PRESS_DURATION) {
-        sleepRequested =
-            true; // Only enter sleep after 500ms of continuous touch
+        Serial.println("[TOUCH] Long press -> sleep");
+        sleepRequested = true;
+        longPressHandled = true;
       }
     }
 
     // Release detection
     if (!isTouched && touched) {
+      unsigned long pressDuration = currentTime - pressStartTime;
+      if (!longPressHandled && pressDuration < SHORT_PRESS_MAX) {
+        Serial.println("[TOUCH] Short press -> toggle chat");
+        toggleChatState();
+      }
       touched = false;
-      pressStartTime = 0; // Reset the press timer
+      pressStartTime = 0;
     }
 
-    vTaskDelay(20); // Reduced from 50ms to 20ms for better responsiveness
+    vTaskDelay(20);
   }
   vTaskDelete(NULL);
 }
@@ -285,8 +294,7 @@ void setup() {
   printOutESP32Error(getErr);
   Button *btn = new Button(BUTTON_PIN, false);
   btn->attachLongPressUpEventCb(&onButtonLongPressUpEventCb, NULL);
-  btn->attachDoubleClickEventCb(&onButtonDoubleClickCb, NULL);
-  btn->detachSingleClickEvent();
+  btn->attachSingleClickEventCb(&onButtonSingleClickCb, NULL);
 #endif
 
   // Load saved volume from NVS
@@ -355,6 +363,10 @@ void setup() {
 
 void loop() {
   processSleepRequest();
+  if (chatToggleRequested) {
+    chatToggleRequested = false;
+    toggleChatState();
+  }
   if (otaState == OTA_IN_PROGRESS) {
     loopOTA();
   }

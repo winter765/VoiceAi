@@ -83,7 +83,7 @@ const int I2S_BCK_OUT = 15;   // SPK BCLK (bread-compact-wifi: GPIO 15)
 const int I2S_DATA_OUT = 7;   // SPK DOUT (bread-compact-wifi: GPIO 7)
 const int I2S_SD_OUT = 10;    // SPK SD/Enable
 
-const gpio_num_t BUTTON_PIN = GPIO_NUM_2; // Only RTC IO are allowed - ESP32 Pin example
+const gpio_num_t BUTTON_PIN = GPIO_NUM_0; // BOOT button, same as xiaozhi bread-compact-wifi
 
 // Volume control buttons (matching bread-compact-wifi board)
 const gpio_num_t VOLUME_UP_PIN = GPIO_NUM_40;
