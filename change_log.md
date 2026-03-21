@@ -2,6 +2,40 @@
 
 ## 2026-03-21
 
+### 按钮控制对话：WebSocket 保持连接，按需创建/销毁 Ultravox 通话
+
+**问题**：ESP32 连接 Server 后立即创建 Ultravox 通话，通话结束时 WebSocket 断开并自动重连，导致浪费 API 额度且用户无法控制对话开始/停止。
+
+**方案**：ESP32 WebSocket 连接保持不断，用户按 BOOT 按钮发送 `START_SESSION` / `STOP_SESSION` 指令，Server 按需创建/销毁 Ultravox 通话。
+
+#### firmware-arduino
+
+- **Audio.cpp**：新增 `toggleChatState()` 函数
+  - IDLE/PROCESSING → 发送 `START_SESSION`，进入 LISTENING
+  - LISTENING → 发送 `STOP_SESSION`，回到 IDLE
+  - SPEAKING → 发送 `STOP_SESSION`，打断回复，回到 IDLE
+- **Audio.cpp**：`WStype_CONNECTED` 改为 `deviceState = IDLE`（不再自动进入 PROCESSING）
+- **Audio.h**：导出 `toggleChatState()`、`transitionToListening()`、`chatToggleRequested`
+- **Config.h**：注释 `TOUCH_MODE`，启用 BUTTON_MODE
+- **Config.cpp**：`BUTTON_PIN` 从 `GPIO_NUM_2` 改为 `GPIO_NUM_0`（BOOT 按钮，匹配 xiaozhi）
+- **main.cpp**：
+  - BOOT 按钮单击 → `chatToggleRequested = true`（在 `loop()` 中调用 `toggleChatState()`）
+  - 移除双击休眠回调（避免影响单击检测速度）
+  - 触摸模式增加短按 toggle chat / 长按休眠逻辑
+
+#### server-deno
+
+- **models/ultravox.ts**：核心改造为监听器模式
+  - `connectToUltravox` 立即 resolve，不再阻塞等待 Ultravox 连接
+  - 新增 `startSession()`：收到 `START_SESSION` 后创建 Ultravox call 并连接 joinUrl
+  - 新增 `stopSession()`：收到 `STOP_SESSION` 后关闭 Ultravox WS，但保持 ESP32 WS
+  - Ultravox WS 关闭时不再关闭 ESP32 WS（仅清理 session 状态）
+  - 增加 PCM 缓冲队列（pcmQueue），防止 `RESPONSE.CREATED` 发送期间音频丢失
+  - 增加 `createdAcked` 标志位，确保 `RESPONSE.CREATED` 发送完成后再转发音频
+  - 音频仅在 `isSessionActive && uvWs.readyState === OPEN` 时转发
+
+---
+
 ### server-deno
 
 #### 配置Ultravox自定义克隆音色
