@@ -2,3 +2,6 @@ node_modules
 .env
 .env.local
 .next
+start.sh
+stop.sh
+next.pid
