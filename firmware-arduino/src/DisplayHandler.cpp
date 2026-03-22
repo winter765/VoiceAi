@@ -1,9 +1,10 @@
 #include "DisplayHandler.h"
 #include "Config.h"
 #include <U8g2lib.h>
+#include <Wire.h>
 
-// SSD1306 128x32 Software I2C
-static U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C u8g2(U8G2_R0, DISPLAY_SCL, DISPLAY_SDA, /* reset=*/U8X8_PIN_NONE);
+// SSD1306 128x32 Hardware I2C
+static U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0, /* reset=*/U8X8_PIN_NONE);
 
 // Thread-safe shared state
 static SemaphoreHandle_t displayMutex = NULL;
@@ -46,6 +47,7 @@ static const char *stateToString(DeviceState state) {
 }
 
 void displayInit() {
+    Wire.begin(DISPLAY_SDA, DISPLAY_SCL, 400000);  // SDA=41, SCL=42, 400kHz
     u8g2.begin();
     u8g2.setFont(u8g2_font_6x10_tf);
     displayMutex = xSemaphoreCreateMutex();
@@ -53,11 +55,17 @@ void displayInit() {
 
 void displaySetChatMessage(const char *role, const char *text) {
     if (!displayMutex) return;
+    // Skip leading whitespace/newlines
+    while (*text == '\n' || *text == '\r' || *text == ' ') text++;
     xSemaphoreTake(displayMutex, portMAX_DELAY);
     strncpy(chatRole, role, sizeof(chatRole) - 1);
     chatRole[sizeof(chatRole) - 1] = '\0';
     strncpy(chatMessage, text, sizeof(chatMessage) - 1);
     chatMessage[sizeof(chatMessage) - 1] = '\0';
+    // Replace remaining newlines with spaces
+    for (int i = 0; chatMessage[i]; i++) {
+        if (chatMessage[i] == '\n' || chatMessage[i] == '\r') chatMessage[i] = ' ';
+    }
     dirty = true;
     scrollOffset = 0;
     scrollPauseUntil = millis() + SCROLL_PAUSE_MS;

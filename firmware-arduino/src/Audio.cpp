@@ -382,9 +382,11 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
 #ifdef DISPLAY_ENABLED
             else if (strcmp((char*)msg.c_str(), "TRANSCRIPT.USER") == 0) {
                 const char *text = doc["text"] | "";
+                Serial.printf("[DISPLAY] TRANSCRIPT.USER text='%s'\n", text);
                 displaySetChatMessage("user", text);
             } else if (strcmp((char*)msg.c_str(), "TRANSCRIPT.ASSISTANT") == 0) {
                 const char *text = doc["text"] | "";
+                Serial.printf("[DISPLAY] TRANSCRIPT.ASSISTANT text='%s'\n", text);
                 displaySetChatMessage("assistant", text);
             }
 #endif

@@ -190,9 +190,6 @@ void getAuthTokenFromNVS() {
 }
 
 void setupWiFi() {
-#ifdef DEV_MODE
-  WifiManager.addWifi("winter765", "joowing1234qwer");
-#endif
   WifiManager.startBackgroundTask(
       "ELATO-DEVICE"); // Run the background task to take care of our Wifi
   WifiManager.fallbackToSoftAp(
@@ -293,6 +290,7 @@ void setup() {
   getErr = esp_sleep_enable_ext0_wakeup(BUTTON_PIN, LOW);
   printOutESP32Error(getErr);
   Button *btn = new Button(BUTTON_PIN, false);
+  gpio_set_pull_mode((gpio_num_t)BUTTON_PIN, GPIO_PULLUP_ONLY); // BOOT按钮需要上拉
   btn->attachLongPressUpEventCb(&onButtonLongPressUpEventCb, NULL);
   btn->attachSingleClickEventCb(&onButtonSingleClickCb, NULL);
 #endif

@@ -1,5 +1,30 @@
 # Change Log
 
+## 2026-03-22
+
+### 固件优化：显示屏硬件I2C、文本显示修复、长按休眠修复
+
+#### firmware-arduino
+
+- **DisplayHandler.cpp**：OLED 显示屏从软件 I2C 改为硬件 I2C (400kHz)
+  - `U8G2_SSD1306_128X32_UNIVISION_F_SW_I2C` → `U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C`
+  - `displayInit()` 中调用 `Wire.begin(SDA=41, SCL=42, 400kHz)` 初始化硬件 I2C
+  - 解决音频播放时显示屏刷新卡顿问题（软件 I2C sendBuffer ~50-100ms → 硬件 I2C ~5ms）
+- **DisplayHandler.cpp**：修复对话文本不显示的问题
+  - `displaySetChatMessage()` 跳过前导空白/换行符
+  - 将文本中的 `\n`/`\r` 替换为空格，防止 U8G2 drawStr 换行导致文字超出屏幕
+- **main.cpp**：修复长按 BOOT 按钮无法进入休眠
+  - Button 构造后手动设置 `gpio_set_pull_mode(BUTTON_PIN, GPIO_PULLUP_ONLY)`
+  - 原因：ESP32_Button 库的 `pullup=false` 会设置 `GPIO_PULLDOWN_ONLY`，导致 GPIO 0 被拉低，按钮状态检测混乱
+- **main.cpp**：移除 DEV_MODE 下的硬编码 WiFi，改为 SoftAP 手机配网
+- **Audio.cpp**：新增 TRANSCRIPT 消息调试日志
+
+### server-deno
+
+- **models/ultravox.ts**：voice 从硬编码改为从数据库 `personality.oai_voice` 字段读取
+
+---
+
 ## 2026-03-21
 
 ### 按钮控制对话：WebSocket 保持连接，按需创建/销毁 Ultravox 通话
