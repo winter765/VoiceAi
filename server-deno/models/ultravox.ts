@@ -71,7 +71,7 @@ export const connectToUltravox = async ({
         throw new Error("ULTRAVOX_API_KEY is not set");
     }
 
-    const voice = "c846dea0-4083-4313-be97-6bf0b7cdc344"; // ToyVoice01 - 克隆音色
+    const voice = payload.user.personality?.oai_voice || "Mark";
 
     // --- On-demand session state ---
     let uvWs: WebSocket | null = null;
