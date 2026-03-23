@@ -1,5 +1,6 @@
 import { createClient } from "@/utils/supabase/server";
 import Steps from "../components/Onboarding/Steps";
+import { Suspense } from "react";
 
 export default async function Home() {
     const supabase = createClient();
@@ -10,7 +11,9 @@ export default async function Home() {
 
     return (
         <div className="flex flex-col gap-2">
-            <Steps userId={user?.id ?? ""} />
+            <Suspense>
+                <Steps userId={user?.id ?? ""} />
+            </Suspense>
         </div>
     );
 }

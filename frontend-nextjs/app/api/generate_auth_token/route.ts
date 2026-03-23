@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
 import { createClient } from "@/utils/supabase/server";
+import { getDeviceByMac, createDevice } from "@/db/devices";
 
 const ALGORITHM = "HS256";
 const skipDeviceRegistration =
@@ -59,6 +60,19 @@ const getDevUser = async () => {
     return data;
 };
 
+function getBaseUrl(req: Request): string {
+    if (process.env.NEXT_PUBLIC_BASE_URL) {
+        return process.env.NEXT_PUBLIC_BASE_URL;
+    }
+    // Derive from request Host header so devices get a reachable URL
+    const host = req.headers.get("host");
+    if (host) {
+        const proto = req.headers.get("x-forwarded-proto") || "http";
+        return `${proto}://${host}`;
+    }
+    return "http://localhost:3000";
+}
+
 export async function GET(req: Request) {
     try {
         const { searchParams } = new URL(req.url);
@@ -71,22 +85,45 @@ export async function GET(req: Request) {
             );
         }
 
-        /**
-         * If `NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION` is true, we use the default dev user.
-         * Otherwise, we use the user by given by the mac address.
-         *
-         * Steps to register your device:
-         * 1: Register the device `mac_address` and `user_code` in the `devices` tables.
-         * 2: Make sure the user adds the `user_code` to their account in Settings to link the device to their `user_id`.
-         * 3: When `NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION` is false, we then fetch the user by `mac_address`.
-         */
-        let user;
+        // Dev mode: skip device registration, use default admin user
         if (skipDeviceRegistration) {
-            user = await getDevUser();
-        } else {
-            user = await getUserByMacAddress(macAddress);
+            const user = await getDevUser();
+            if (!user) {
+                return NextResponse.json(
+                    { error: "Dev user not found" },
+                    { status: 500 },
+                );
+            }
+            const token = createSupabaseToken(
+                process.env.JWT_SECRET_KEY!,
+                { email: user.email, user_id: user.user_id, created_time: new Date() },
+                null,
+            );
+            return NextResponse.json({ status: "ok", token });
         }
 
+        const supabase = createClient();
+
+        // Look up device by MAC address
+        let device = await getDeviceByMac(supabase, macAddress);
+
+        // Device not in DB → auto-create (self-registration)
+        if (!device) {
+            device = await createDevice(supabase, macAddress);
+        }
+
+        // Device exists but not bound to a user → return pending status
+        if (!device.user_id) {
+            const registerUrl = `${getBaseUrl(req)}/register?mac=${encodeURIComponent(macAddress)}`;
+            return NextResponse.json({
+                status: "pending",
+                user_code: device.user_code,
+                register_url: registerUrl,
+            });
+        }
+
+        // Device bound to user → fetch user and generate JWT
+        const user = await getUserByMacAddress(macAddress);
         if (!user) {
             return NextResponse.json(
                 { error: "User not found" },
@@ -106,7 +143,7 @@ export async function GET(req: Request) {
             null,
         );
 
-        return NextResponse.json({ token });
+        return NextResponse.json({ status: "ok", token });
     } catch (error) {
         return NextResponse.json(
             {

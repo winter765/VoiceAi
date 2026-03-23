@@ -4,7 +4,7 @@ import { encodedRedirect } from "@/utils/utils";
 import { createClient } from "@/utils/supabase/server";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { addUserToDevice, dbCheckUserCode } from "@/db/devices";
+import { addUserToDevice, addUserToDeviceByMac, dbCheckUserCode, unbindDevice, getDeviceByMac } from "@/db/devices";
 import { getSimpleUserById } from "@/db/users";
 
 export async function deleteUserApiKey(userId: string) {
@@ -137,6 +137,28 @@ export const connectUserToDevice = async (
         userId,
     );
     return successfullyAdded;
+};
+
+export const connectUserToDeviceByMacAction = async (
+    userId: string,
+    macAddress: string,
+) => {
+    const supabase = createClient();
+    return await addUserToDeviceByMac(supabase, macAddress, userId);
+};
+
+export const unbindDeviceAction = async (
+    deviceId: string,
+    userId: string,
+) => {
+    const supabase = createClient();
+    await unbindDevice(supabase, deviceId, userId);
+    return true;
+};
+
+export const getDeviceByMacAction = async (macAddress: string) => {
+    const supabase = createClient();
+    return await getDeviceByMac(supabase, macAddress);
 };
 
 export const fetchGithubStars = async (repo: string) => {

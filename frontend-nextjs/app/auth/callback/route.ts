@@ -1,4 +1,5 @@
 import { createUser, doesUserExist } from "@/db/users";
+import { addUserToDeviceByMac } from "@/db/devices";
 import { createClient } from "@/utils/supabase/server";
 import { NextResponse } from "next/server";
 import { defaultPersonalityId, defaultToyId } from "@/lib/data";
@@ -10,10 +11,8 @@ export async function GET(request: Request) {
     // https://supabase.com/docs/guides/auth/server-side/nextjs
     const requestUrl = new URL(request.url);
     const code = requestUrl.searchParams.get("code");
-    const queryParamsToyId = requestUrl.searchParams.get("toy_id");
+    const mac = requestUrl.searchParams.get("mac");
 
-    // const origin = requestUrl.origin;
-    // const origin = "http://localhost:3000";
     const origin = getBaseUrl();
 
     if (code) {
@@ -23,10 +22,7 @@ export async function GET(request: Request) {
             data: { user },
         } = await supabase.auth.getUser();
 
-        // console.log("user+++++", user);
-
         if (user) {
-            // console.log("user+++++2", user);
             const userExists = await doesUserExist(supabase, user);
             if (!userExists) {
                 // Create user if they don't exist
@@ -37,7 +33,17 @@ export async function GET(request: Request) {
                         defaultPersonalityId,
                 });
 
+                // Auto-bind device if mac parameter is present
+                if (mac) {
+                    await addUserToDeviceByMac(supabase, mac, user.id);
+                }
+
                 return NextResponse.redirect(`${origin}/onboard`);
+            }
+
+            // Existing user — still auto-bind device if mac present and not yet bound
+            if (mac) {
+                await addUserToDeviceByMac(supabase, mac, user.id);
             }
         }
     }

@@ -1,6 +1,6 @@
 "use client";
 
-import { connectUserToDevice, signOutAction } from "@/app/actions";
+import { connectUserToDevice, connectUserToDeviceByMacAction, unbindDeviceAction, signOutAction } from "@/app/actions";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -30,8 +30,10 @@ const AppSettings: React.FC<AppSettingsProps> = ({
     const supabase = createClient();
     const { toast } = useToast();
     const [isConnected, setIsConnected] = React.useState(false);
+    const [deviceInfo, setDeviceInfo] = React.useState<any>(null);
     const doctorFormRef = React.useRef<{ submitForm: () => void } | null>(null);
     const userFormRef = React.useRef<{ submitForm: () => void } | null>(null);
+    const [bindingMode, setBindingMode] = React.useState<"code" | "mac">("code");
     const [deviceCode, setDeviceCode] = React.useState("");
     const [error, setError] = React.useState("");
 
@@ -43,15 +45,24 @@ const AppSettings: React.FC<AppSettingsProps> = ({
         }
     };
 
-    const checkIfUserHasDevice = useCallback(async () => {
-        setIsConnected(
-            await doesUserHaveADevice(supabase, selectedUser.user_id)
-        );
+    const fetchDeviceInfo = useCallback(async () => {
+        const { data } = await supabase
+            .from("devices")
+            .select("*")
+            .eq("user_id", selectedUser.user_id)
+            .maybeSingle();
+        if (data) {
+            setIsConnected(true);
+            setDeviceInfo(data);
+        } else {
+            setIsConnected(false);
+            setDeviceInfo(null);
+        }
     }, [selectedUser.user_id, supabase]);
 
     React.useEffect(() => {
-        checkIfUserHasDevice();
-    }, [checkIfUserHasDevice]);
+        fetchDeviceInfo();
+    }, [fetchDeviceInfo]);
 
 
     const [volume, setVolume] = React.useState([
@@ -84,13 +95,39 @@ const AppSettings: React.FC<AppSettingsProps> = ({
                 user_info: {
                     user_type: userType,
                     user_metadata: values,
-                },  
+                },
             },
             userId);
             toast({
                 description: "Your prefereces have been saved!",
             });
     }
+
+    const handleRegister = async () => {
+        setError("");
+        let result = false;
+        if (bindingMode === "mac") {
+            result = await connectUserToDeviceByMacAction(selectedUser.user_id, deviceCode.trim());
+        } else {
+            result = await connectUserToDevice(selectedUser.user_id, deviceCode.trim());
+        }
+        if (!result) {
+            setError(bindingMode === "mac" ? "Device not found or already bound." : "Invalid device code.");
+        }
+        fetchDeviceInfo();
+    };
+
+    const handleUnbind = async () => {
+        if (!deviceInfo?.device_id) return;
+        try {
+            await unbindDeviceAction(deviceInfo.device_id, selectedUser.user_id);
+            toast({ description: "Device unbound successfully." });
+            setDeviceCode("");
+            fetchDeviceInfo();
+        } catch {
+            toast({ description: "Failed to unbind device.", variant: "destructive" });
+        }
+    };
 
     return (
         <>
@@ -113,41 +150,76 @@ const AppSettings: React.FC<AppSettingsProps> = ({
                     <Label className="text-sm font-medium text-gray-700">
                     Register your device
                     </Label>
-                        <div 
+                        <div
                             className={`rounded-full flex-shrink-0 h-2 w-2 ${
                                 isConnected ? 'bg-green-500' : 'bg-amber-500'
-                            }`} 
-                        />    
+                            }`}
+                        />
 
                         </div>
+
+                        {isConnected && deviceInfo && (
+                            <div className="flex flex-col gap-1 text-xs text-gray-500 mb-2">
+                                <span>MAC: {deviceInfo.mac_address}</span>
+                                {deviceInfo.device_name && <span>Name: {deviceInfo.device_name}</span>}
+                                {deviceInfo.firmware_version && <span>Firmware: {deviceInfo.firmware_version}</span>}
+                                <span>Code: {deviceInfo.user_code}</span>
+                            </div>
+                        )}
+
+                        {!isConnected && !skipDeviceRegistration && (
+                            <div className="flex gap-2 mb-1">
+                                <button
+                                    type="button"
+                                    onClick={() => { setBindingMode("code"); setDeviceCode(""); setError(""); }}
+                                    className={`px-2 py-0.5 rounded text-xs ${bindingMode === "code" ? "bg-gray-800 text-white" : "bg-gray-100"}`}
+                                >
+                                    Device Code
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => { setBindingMode("mac"); setDeviceCode(""); setError(""); }}
+                                    className={`px-2 py-0.5 rounded text-xs ${bindingMode === "mac" ? "bg-gray-800 text-white" : "bg-gray-100"}`}
+                                >
+                                    MAC Address
+                                </button>
+                            </div>
+                        )}
 
                         <div className="flex flex-row items-center gap-2 mt-2">
                             <Input
                                 value={deviceCode}
                                 disabled={isConnected || skipDeviceRegistration}
                                 onChange={(e) => setDeviceCode(e.target.value)}
-                                placeholder={isConnected ? "**********" : "Enter your device code"}
+                                placeholder={
+                                    isConnected ? "**********" :
+                                    bindingMode === "mac" ? "XX:XX:XX:XX:XX:XX" : "Enter your device code"
+                                }
                                 maxLength={100}
                             />
-                            <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={isConnected || skipDeviceRegistration}
-                                onClick={async () => {
-                                    const result = await connectUserToDevice(selectedUser.user_id, deviceCode);
-                                    if (!result) {
-                                        setError("Error registering device");
-                                    }
-                                    checkIfUserHasDevice();
-                                }}
-                            >
-                                Register
-                            </Button>
+                            {isConnected ? (
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={handleUnbind}
+                                >
+                                    Unbind
+                                </Button>
+                            ) : (
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={skipDeviceRegistration}
+                                    onClick={handleRegister}
+                                >
+                                    Register
+                                </Button>
+                            )}
                         </div>
                         <p className="text-xs text-gray-400">
                             {isConnected ? <span className="font-medium text-gray-800">Registered!</span> :
-                                error ? <span className="text-red-500">{error}.</span> :
-                                "Enter your device code to register it."
+                                error ? <span className="text-red-500">{error}</span> :
+                                bindingMode === "mac" ? "Enter your device MAC address to register it." : "Enter your device code to register it."
                         }
                         </p>
                 </div>

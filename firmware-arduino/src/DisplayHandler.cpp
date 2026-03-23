@@ -41,6 +41,8 @@ static const char *stateToString(DeviceState state) {
         return "Resetting...";
     case SLEEP:
         return "Sleep";
+    case WAITING_FOR_REGISTRATION:
+        return "Register";
     default:
         return "Unknown";
     }
@@ -66,6 +68,19 @@ void displaySetChatMessage(const char *role, const char *text) {
     for (int i = 0; chatMessage[i]; i++) {
         if (chatMessage[i] == '\n' || chatMessage[i] == '\r') chatMessage[i] = ' ';
     }
+    dirty = true;
+    scrollOffset = 0;
+    scrollPauseUntil = millis() + SCROLL_PAUSE_MS;
+    xSemaphoreGive(displayMutex);
+}
+
+void displaySetRegistrationInfo(const char *url, const char *userCode) {
+    if (!displayMutex) return;
+    xSemaphoreTake(displayMutex, portMAX_DELAY);
+    // Show user code as "role" and URL as message for scrolling display
+    snprintf(chatRole, sizeof(chatRole), "Code:%s", userCode);
+    strncpy(chatMessage, url, sizeof(chatMessage) - 1);
+    chatMessage[sizeof(chatMessage) - 1] = '\0';
     dirty = true;
     scrollOffset = 0;
     scrollPauseUntil = millis() + SCROLL_PAUSE_MS;

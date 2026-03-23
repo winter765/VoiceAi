@@ -12,11 +12,27 @@
 #include <WiFi.h>
 #include <Preferences.h>
 #include <Config.h>
+#include "DisplayHandler.h"
 
-bool isDeviceRegistered() {
-  if (!authTokenGlobal.isEmpty()) {
-    return true;
-  }
+// Registration polling task handle
+static TaskHandle_t registrationPollTask = NULL;
+
+// Registration info (populated when device is pending registration)
+static String pendingRegisterUrl = "";
+static String pendingUserCode = "";
+static String authStatus = "unknown"; // "unknown", "pending", "ok", "error"
+
+// Result codes for checkDeviceAuth
+enum AuthResult {
+    AUTH_OK,         // Got token, device is bound
+    AUTH_PENDING,    // Device exists but not bound to user
+    AUTH_ERROR       // Network or parse error
+};
+
+static AuthResult checkDeviceAuth() {
+    if (!authTokenGlobal.isEmpty()) {
+        return AUTH_OK;
+    }
 
     HTTPClient http;
 
@@ -43,39 +59,128 @@ bool isDeviceRegistered() {
             Serial.print("JSON parsing failed: ");
             Serial.println(error.c_str());
             http.end();
-            return false;
+            return AUTH_ERROR;
         }
 
-        String authToken = doc["token"];
+        const char *status = doc["status"] | "";
+
+        // Device bound, got token
+        if (strcmp(status, "ok") == 0) {
+            String authToken = doc["token"] | "";
+            if (!authToken.isEmpty()) {
+                preferences.begin("auth", false);
+                preferences.putString("auth_token", authToken);
+                preferences.end();
+                authTokenGlobal = String(authToken);
+                authStatus = "ok";
+                http.end();
+                return AUTH_OK;
+            }
+        }
+
+        // Device exists but not bound to user yet
+        if (strcmp(status, "pending") == 0) {
+            const char *userCode = doc["user_code"] | "";
+            const char *registerUrl = doc["register_url"] | "";
+            pendingRegisterUrl = String(registerUrl);
+            pendingUserCode = String(userCode);
+            authStatus = "pending";
+            Serial.printf("[REG] Pending registration. Code: %s URL: %s\n", userCode, registerUrl);
+            displaySetRegistrationInfo(registerUrl, userCode);
+            http.end();
+            return AUTH_PENDING;
+        }
+
+        // Legacy format: no "status" field, just "token" directly
+        String authToken = doc["token"] | "";
         if (!authToken.isEmpty()) {
-            // Store the auth token in NVS
             preferences.begin("auth", false);
             preferences.putString("auth_token", authToken);
             preferences.end();
-
             authTokenGlobal = String(authToken);
+            authStatus = "ok";
             http.end();
-            return true;
+            return AUTH_OK;
         }
     }
 
-    // If we get here, either the request failed or no token was found
+    authStatus = "error";
     http.end();
-    return false;
+    return AUTH_ERROR;
+}
+
+bool isDeviceRegistered() {
+    return checkDeviceAuth() == AUTH_OK;
+}
+
+// FreeRTOS task: polls for registration every 10 seconds
+static void registrationPollTaskFunc(void *param) {
+    const TickType_t pollInterval = 10000 / portTICK_PERIOD_MS;
+    Serial.println("[REG] Waiting for user registration...");
+
+    while (1) {
+        vTaskDelay(pollInterval);
+        Serial.println("[REG] Polling for registration...");
+        AuthResult result = checkDeviceAuth();
+        if (result == AUTH_OK) {
+            Serial.println("[REG] Registration complete! Device is now bound.");
+            deviceState = IDLE;
+            // Stop SoftAP now that registration is complete
+            WiFi.softAPdisconnect();
+            WiFi.mode(WIFI_STA);
+            // Device is now registered, proceed with normal flow
+            if (otaState == OTA_IN_PROGRESS) {
+                performOTAUpdate();
+            } else if (otaState == OTA_COMPLETE) {
+                markOTAUpdateComplete();
+                ESP.restart();
+            } else {
+                websocketSetup(ws_server, ws_port, ws_path);
+            }
+            // Delete this task
+            registrationPollTask = NULL;
+            vTaskDelete(NULL);
+            return;
+        }
+        // AUTH_PENDING or AUTH_ERROR: keep polling
+    }
 }
 
 void connectCb() {
-  Serial.println("On connecting to Wifi");
-  if (isDeviceRegistered())  {
-    if (otaState == OTA_IN_PROGRESS) {
-        performOTAUpdate();
-    } else if (otaState == OTA_COMPLETE) {
-        markOTAUpdateComplete();
-        ESP.restart();
+    Serial.println("On connecting to Wifi");
+    AuthResult result = checkDeviceAuth();
+
+    if (result == AUTH_OK) {
+        if (otaState == OTA_IN_PROGRESS) {
+            performOTAUpdate();
+        } else if (otaState == OTA_COMPLETE) {
+            markOTAUpdateComplete();
+            ESP.restart();
+        } else {
+            websocketSetup(ws_server, ws_port, ws_path);
+        }
+    } else if (result == AUTH_PENDING) {
+        // Set state immediately so tryConnect() knows to keep SoftAP
+        deviceState = WAITING_FOR_REGISTRATION;
+        // Start SoftAP in AP+STA mode so user can access config page for registration
+        WiFi.mode(WIFI_AP_STA);
+        WiFi.softAP("VOICE-DEVICE");
+        Serial.println("[REG] Started SoftAP for registration. IP: " + WiFi.softAPIP().toString());
+        // Start polling task for registration
+        if (registrationPollTask == NULL) {
+            xTaskCreatePinnedToCore(
+                registrationPollTaskFunc,
+                "RegPoll",
+                4096,
+                NULL,
+                1,
+                &registrationPollTask,
+                0
+            );
+        }
     } else {
-        websocketSetup(ws_server, ws_port, ws_path);
+        Serial.println("[REG] Auth check failed, will retry on next WiFi reconnect");
     }
-  } 
 }
 
 /**
@@ -399,6 +504,11 @@ void WIFIMANAGER::loop() {
   }
 
   if (softApRunning && millis() - startApTimeMillis > timeoutApMillis) {
+    // Don't auto-close AP while waiting for registration
+    if (deviceState == WAITING_FOR_REGISTRATION) {
+      startApTimeMillis = millis();
+      return;
+    }
     if (WiFi.softAPgetStationNum() > 0) {
       logMessage("[WIFI] SoftAP has " + String(WiFi.softAPgetStationNum()) + " clients connected!\n");
       startApTimeMillis = millis(); // reset timeout as someone is connected
@@ -494,7 +604,14 @@ bool WIFIMANAGER::tryConnect() {
         logMessage("[WIFI] SSID   : " + WiFi.SSID() + "\n");
         logMessage("[WIFI] IP     : " + WiFi.localIP().toString() + "\n");
         connectCb();
-        stopSoftAP();
+        // Keep SoftAP running if device is waiting for registration,
+        // so the user can see the registration link on the config page
+        if (deviceState != WAITING_FOR_REGISTRATION) {
+          stopSoftAP();
+        } else {
+          logMessage("[WIFI] Keeping SoftAP alive for registration page\n");
+          WiFi.mode(WIFI_AP_STA); // Run both AP and STA simultaneously
+        }
         return true;
         break;
       case WL_CONNECT_FAILED:
@@ -676,7 +793,9 @@ void WIFIMANAGER::attachWebServer(WebServer * srv) {
     }
     if (!addWifi(jsonBuffer["apName"].as<String>(), jsonBuffer["apPass"].as<String>())) {
       resp->send(500, "application/json", "{\"message\":\"Unable to process data\"}");
-    } else {resp->send(200, "application/json", "{\"message\":\"New network added\"");}
+    } else {
+      resp->send(200, "application/json", "{\"message\":\"New network added\"}");
+    }
   });
 
 #if ASYNC_WEBSERVER == true
@@ -838,6 +957,32 @@ void WIFIMANAGER::attachWebServer(WebServer * srv) {
     webServer->send(200, "application/json", buffer);
 #endif
   });
+
+  // Registration status endpoint — used by WiFi config page to show registration link
+#if ASYNC_WEBSERVER == true
+  webServer->on((apiPrefix + "/registration").c_str(), HTTP_GET, [](AsyncWebServerRequest *request) {
+    AsyncResponseStream *response = request->beginResponseStream("application/json");
+#else
+  webServer->on((apiPrefix + "/registration").c_str(), HTTP_GET, [&]() {
+    String buffer;
+#endif
+
+    JsonDocument jsonDoc;
+    jsonDoc["status"] = authStatus;
+    jsonDoc["mac"] = WiFi.macAddress();
+    jsonDoc["register_url"] = pendingRegisterUrl;
+    jsonDoc["user_code"] = pendingUserCode;
+
+#if ASYNC_WEBSERVER == true
+    serializeJson(jsonDoc, *response);
+    response->setCode(200);
+    response->setContentLength(measureJson(jsonDoc));
+    request->send(response);
+#else
+    serializeJson(jsonDoc, buffer);
+    webServer->send(200, "application/json", buffer);
+#endif
+  });
 }
 
 /**
@@ -858,7 +1003,7 @@ void WIFIMANAGER::attachUI() {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YOUR ELATO 😊</title>
+    <title>VOICE DEVICE</title>
     <style>
         :root {
             --primary-color: #2563eb;
@@ -1037,22 +1182,28 @@ void WIFIMANAGER::attachUI() {
         }
     </style>
 </head>
-<body>
+<body data-mac="__MAC__" data-reg-url="__REG_URL__">
     <div class="container">
+        <div id="registrationCard" class="card" style="display:none;">
+            <h2 id="regTitle">Registering...</h2>
+            <p id="regDesc"></p>
+            <div id="regActions"></div>
+        </div>
+
         <div class="card">
-            <h1>YOUR ELATO DEVICE 😊</h1>
+            <h1>VOICE DEVICE</h1>
             <div id="status"></div>
             <button onclick="scanNetworks()">Scan for Networks</button>
             <button onclick="showConnectModal()">Manual Connect</button>
         </div>
 
         <div class="card">
-            <h2>✅ Saved Networks</h2>
+            <h2>Saved Networks</h2>
             <div id="savedNetworks" class="network-list"></div>
         </div>
 
         <div class="card">
-            <h2>🛜 Available Networks</h2>
+            <h2>Available Networks</h2>
             <div id="networkList" class="network-list"></div>
         </div>
     </div>
@@ -1219,13 +1370,37 @@ void WIFIMANAGER::attachUI() {
                 if (!response.ok) throw new Error('Connection failed');
 
                 closeModal();
-                showStatus('Successfully connected!', 'success');
-                
-                // Refresh saved networks list
+                showStatus('WiFi saved successfully!', 'success');
                 await loadSavedNetworks();
+
+                // Show registration card immediately
+                showRegistrationCard();
             } catch (error) {
                 showStatus(error.message, 'error');
             }
+        }
+
+        function showRegistrationCard() {
+            const mac = document.body.getAttribute('data-mac');
+            const regUrl = document.body.getAttribute('data-reg-url');
+            const loginUrl = regUrl.replace('/register?', '/login?');
+            const card = document.getElementById('registrationCard');
+
+            card.style.display = 'block';
+            document.getElementById('regTitle').textContent = 'Next: Register Your Account';
+            document.getElementById('regDesc').innerHTML =
+                'WiFi has been saved. Now register an account to activate your device.' +
+                '<br><br><strong>Step 1:</strong> Switch your phone back to your home WiFi' +
+                '<br><strong>Step 2:</strong> Click the link below to register' +
+                '<br><br>MAC: <strong>' + mac + '</strong>';
+            document.getElementById('regActions').innerHTML =
+                '<a href="' + regUrl + '" ' +
+                'style="display:inline-block;background:#2563eb;color:white;padding:12px 24px;' +
+                'border-radius:6px;text-decoration:none;font-size:16px;margin-top:8px;">' +
+                'Register Now</a>' +
+                '<p style="margin-top:12px;font-size:13px;color:#64748b;">' +
+                'Already have an account? <a href="' + loginUrl + '">Login</a></p>' +
+                '<p style="margin-top:8px;font-size:12px;color:#94a3b8;word-break:break-all;">' + regUrl + '</p>';
         }
 
         function showStatus(message, type) {
@@ -1237,6 +1412,13 @@ void WIFIMANAGER::attachUI() {
 </body>
 </html>
 )html";
+
+    // Inject device MAC and registration URL into the page
+    String mac = WiFi.macAddress();
+    String regUrl = "http://" + String(backend_server) + ":" + String(backend_port)
+                    + "/register?mac=" + mac;
+    html.replace("__MAC__", mac);
+    html.replace("__REG_URL__", regUrl);
 
 #if ASYNC_WEBSERVER == true
     request->send(200, "text/html", html);

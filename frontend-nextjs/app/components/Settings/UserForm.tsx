@@ -47,7 +47,7 @@ const GeneralUserForm = ({ selectedUser, onSave, onClickCallback, userId, headin
     const form = useForm<GeneralUserInput>({
         defaultValues: {
             supervisee_name: selectedUser?.supervisee_name ?? "",
-            supervisee_age: selectedUser?.supervisee_age ?? 0,
+            supervisee_age: selectedUser?.supervisee_age ?? 10,
             supervisee_persona: selectedUser?.supervisee_persona ?? "",
         },
     });

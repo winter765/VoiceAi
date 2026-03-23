@@ -44,7 +44,8 @@ enum DeviceState
     WAITING,
     OTA,
     FACTORY_RESET,
-    SLEEP
+    SLEEP,
+    WAITING_FOR_REGISTRATION
 };
 
 extern volatile DeviceState deviceState;

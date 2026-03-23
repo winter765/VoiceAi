@@ -302,6 +302,9 @@ void ledTask(void *parameter)
         case OTA:
             setStaticColor(StaticColor::CYAN);
             break;
+        case WAITING_FOR_REGISTRATION:
+            pulseMagenta();
+            break;
         default:
             setStaticColor(StaticColor::GREEN); // LED on
             break;

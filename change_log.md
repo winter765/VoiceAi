@@ -1,5 +1,70 @@
 # Change Log
 
+## 2026-03-23
+
+### 完整注册流程：设备自注册 + Web注册 + 自动绑定
+
+实现从新设备开箱到注册完成可使用的完整流程：开机 → WiFi配网 → 设备自注册 → 用户注册/登录 → 自动绑定设备 → 开始对话。
+
+#### firmware-arduino
+
+- **WifiManager.cpp**：设备自注册与注册引导
+  - 新增 `WAITING_FOR_REGISTRATION` 状态，设备未绑定用户时保持 SoftAP 热点
+  - WiFi 配网页面直接嵌入注册链接（`data-mac`/`data-reg-url`），用户保存 WiFi 后立即显示注册入口
+  - 新增 `/api/wifi/registration` API 端点，返回设备认证状态、MAC 地址、注册 URL
+  - 新增注册轮询任务 `registrationPollTaskFunc`，每 10 秒检测设备是否已绑定用户
+  - AP+STA 双模式：配网热点与 WiFi 连接同时运行，注册完成后自动关闭热点
+  - `connectCb()` 解析新的 API 响应格式（`status: "pending"/"ok"`）
+- **DisplayHandler.cpp/h**：新增 `displaySetRegistrationInfo()` 显示注册引导信息
+- **LEDHandler.cpp**：新增 `WAITING_FOR_REGISTRATION` 状态 LED 蓝色呼吸灯
+- **Config.h**：`DeviceState` 枚举新增 `WAITING_FOR_REGISTRATION`
+- **Config.cpp**：DEV_MODE 服务器地址改为本地 `192.168.124.3`
+- **main.cpp**：`loop()` 中跳过 SoftAP 超时逻辑（注册等待期间保持热点）
+
+#### frontend-nextjs
+
+- **app/(auth-pages)/register/page.tsx**：新增独立注册页面
+  - 支持 `?mac=XX:XX:XX:XX:XX:XX` 参数，注册成功后自动绑定设备
+  - 邮箱确认关闭时直接登录并创建用户记录
+  - 注册后跳转 `/onboard?mac=...` 传递 MAC 地址
+- **app/(auth-pages)/login/page.tsx**：登录支持自动设备绑定
+  - 支持 `?mac=` 参数，登录成功后自动调用 `addUserToDeviceByMac` 绑定设备
+  - 添加注册链接，保留 mac 参数传递
+- **app/api/generate_auth_token/route.ts**：设备自注册 API
+  - 设备首次请求时自动创建 `devices` 记录（`createDevice`）
+  - 未绑定用户时返回 `{ status: "pending", user_code, register_url }`
+  - `register_url` 从 HTTP Host 头动态生成，支持各种网络环境
+- **app/components/Onboarding/Steps.tsx**：Onboarding 增加设备绑定和角色选择
+  - Step 1: 基本信息（已有）
+  - Step 2: 设备绑定（新增）— 支持 MAC 地址或 user_code 绑定，已绑定则自动跳过
+  - Step 3: 角色选择（新增）— 从 personalities 表加载可选角色
+- **app/components/Settings/AppSettings.tsx**：设备管理增强
+  - 支持 MAC 地址直接绑定（除 user_code 外）
+  - 新增解绑设备功能
+  - 显示已绑定设备信息（MAC 地址）
+- **app/components/Settings/UserForm.tsx**：年龄默认值从 0 改为 10
+- **app/actions.ts**：新增 `connectUserToDeviceByMacAction` server action
+- **app/auth/callback/route.ts**：OAuth 回调支持 mac 参数自动绑定
+- **app/onboard/page.tsx**：传递 `searchParams` 给 Steps 组件
+- **db/devices.ts**：新增设备数据库操作
+  - `getDeviceByMac`、`createDevice`（自动生成 6 位 user_code）
+  - `addUserToDeviceByMac`（同时更新 devices.user_id 和 users.device_id）
+  - `unbindDevice`（解绑设备）
+
+#### supabase
+
+- **migrations/20260323000000_device_self_register.sql**：
+  - devices 表新增 `created_at`、`device_name`、`firmware_version` 字段
+  - 新增设备自注册 RLS 策略（允许匿名 INSERT）
+  - personalities 表 provider 约束新增 `ultravox`
+
+#### 数据库修复
+
+- personalities 表 `provider` check 约束新增 `ultravox` 选项
+- elato_default personality 的 `oai_voice` 更新为当前有效的 Ultravox 音色 ID
+
+---
+
 ## 2026-03-22
 
 ### 固件优化：显示屏硬件I2C、文本显示修复、长按休眠修复
