@@ -15,12 +15,11 @@ import { Label } from "@/components/ui/label";
 import GoogleLoginButton from "../../components/GoogleLoginButton";
 
 interface RegisterProps {
-  searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
+  searchParams?: { [key: string]: string | string[] | undefined };
 }
 
 export default async function Register({ searchParams }: RegisterProps) {
-  const params = await searchParams;
-  const mac = params?.mac as string | undefined;
+  const mac = searchParams?.mac as string | undefined;
   const isGoogleOAuthEnabled = process.env.GOOGLE_OAUTH === "True";
 
   const signUpAction = async (formData: FormData) => {
@@ -136,9 +135,9 @@ export default async function Register({ searchParams }: RegisterProps) {
               </p>
             )}
 
-            {params?.message && (
+            {searchParams?.message && (
               <p className="p-4 rounded-md border bg-green-50 border-green-400 text-gray-900 text-center text-sm">
-                {params.message}
+                {searchParams.message}
               </p>
             )}
 
