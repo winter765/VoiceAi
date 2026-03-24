@@ -211,6 +211,13 @@ export const connectToHume = ({
 
     humeWs.on("close", (code: number, reason: Buffer) => {
         console.log(`Hume WebSocket closed: ${code} - ${reason.toString()}`);
+        // If there was an active response, notify ESP32 that it's complete
+        if (createdSent) {
+            console.log("[DEBUG] Hume closed during active response, sending RESPONSE.COMPLETE to ESP32");
+            opus.flush(true);
+            ws.send(JSON.stringify({ type: "server", msg: "RESPONSE.COMPLETE" }));
+            createdSent = false;
+        }
         ws.send(JSON.stringify({
             type: "server",
             msg: "SESSION.END",
