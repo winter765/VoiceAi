@@ -14,11 +14,12 @@ import { Separator } from "@radix-ui/react-dropdown-menu";
 import { Sparkles } from "lucide-react";
 import Link from "next/link";
 
-export default function ForgotPassword({
+export default async function ForgotPassword({
   searchParams,
 }: {
-  searchParams: Message;
+  searchParams: Promise<Message>;
 }) {
+  const params = await searchParams;
   return (
     <div className="flex-1 flex flex-col w-full px-8 sm:max-w-md justify-center gap-2">
       <Card>
@@ -40,7 +41,7 @@ export default function ForgotPassword({
               <SubmitButton formAction={forgotPasswordAction}>
                 Reset Password
               </SubmitButton>
-              <FormMessage message={searchParams} />
+              <FormMessage message={params} />
             </div>
             <div>
               <p className="text-sm text-secondary-foreground">
