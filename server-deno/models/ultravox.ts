@@ -252,6 +252,14 @@ export const connectToUltravox = async ({
 
         newUvWs.on("close", () => {
             console.log("[UV] Ultravox WebSocket closed");
+            // If there was an active response, notify ESP32 that it's complete
+            if (createdSent) {
+                console.log("[DEBUG] Ultravox closed during active response, sending RESPONSE.COMPLETE to ESP32");
+                opus.flush(true);
+                ws.send(JSON.stringify({ type: "server", msg: "RESPONSE.COMPLETE" }));
+                createdSent = false;
+                createdAcked = false;
+            }
             // Do NOT close ESP32 ws — just clean up session state
             if (uvWs === newUvWs) {
                 uvWs = null;
