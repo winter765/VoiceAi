@@ -51,13 +51,7 @@ export default async function Register({ searchParams }: RegisterProps) {
 
     // If email confirmation is disabled, user is already logged in
     if (data?.session) {
-      // Auto-bind device if mac parameter is present
-      if (macAddress) {
-        const { addUserToDeviceByMac } = await import("@/db/devices");
-        await addUserToDeviceByMac(supabase, macAddress, data.user!.id);
-      }
-
-      // Create user record in public.users if needed
+      // Create user record in public.users first
       const { doesUserExist, createUser } = await import("@/db/users");
       const { defaultPersonalityId } = await import("@/lib/data");
       const userExists = await doesUserExist(supabase, data.user!);
@@ -66,6 +60,12 @@ export default async function Register({ searchParams }: RegisterProps) {
           language_code: "en-US",
           personality_id: defaultPersonalityId,
         });
+      }
+
+      // Then bind device to user
+      if (macAddress) {
+        const { addUserToDeviceByMac } = await import("@/db/devices");
+        await addUserToDeviceByMac(supabase, macAddress, data.user!.id);
       }
 
       return redirect(macAddress ? `/onboard?mac=${encodeURIComponent(macAddress)}` : "/onboard");
