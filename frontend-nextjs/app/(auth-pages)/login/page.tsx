@@ -54,7 +54,7 @@ export default async function Login({ searchParams }: LoginProps) {
 
   return (
     <div className="flex-1 flex flex-col w-full px-8 sm:max-w-md justify-center gap-2">
-      <Card className="shadow-md sm:bg-white bg-transparent shadow-none">
+      <Card className="bg-white shadow-md">
         <CardHeader>
           <CardTitle className="flex flex-row gap-1 items-center">
             Login to Elato

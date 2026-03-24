@@ -31,6 +31,9 @@ export const getUserByEmail = async (
     if (error) {
         throw new Error("Failed to authenticate user");
     }
+    if (!data || data.length === 0) {
+        throw new Error(`User not found for email: ${email}`);
+    }
     return data[0] as IUser;
 };
 
