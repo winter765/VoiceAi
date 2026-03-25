@@ -40,6 +40,19 @@ constexpr int MIC_OPUS_FRAME_BYTES = MIC_OPUS_FRAME_SAMPLES * 2;  // 640 bytes (
 constexpr int MIC_OPUS_MAX_PACKET_SIZE = 256;  // Max Opus packet size for voice
 constexpr int MIC_OPUS_BITRATE = 24000;  // 24 kbps for voice
 
+// Audio send queue for decoupling mic task from network task
+// This prevents network latency from blocking audio capture
+constexpr int AUDIO_SEND_QUEUE_SIZE = 30;  // ~600ms buffer at 20ms/packet
+
+// Structure for audio packet in queue
+struct AudioPacket {
+    uint8_t data[MIC_OPUS_MAX_PACKET_SIZE];
+    size_t length;
+};
+
+extern QueueHandle_t audioSendQueue;
+void clearAudioSendQueue();
+
 // NEW for pitch shift
 extern VolumeStream volumePitch;
 extern StreamCopy pitchCopier;

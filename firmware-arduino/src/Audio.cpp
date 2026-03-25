@@ -27,6 +27,17 @@ float currentPitchFactor = 1.0f;
 const int CHANNELS = 1;         // Mono
 const int BITS_PER_SAMPLE = 16; // 16-bit audio
 
+// Audio send queue for decoupling mic task from network task
+QueueHandle_t audioSendQueue = NULL;
+static int queueDropCount = 0;  // Track dropped packets when queue is full
+
+void clearAudioSendQueue() {
+    if (audioSendQueue != NULL) {
+        xQueueReset(audioSendQueue);
+        queueDropCount = 0;
+    }
+}
+
 // AUDIO OUTPUT
 class BufferPrint : public Print {
 public:
@@ -100,12 +111,15 @@ void transitionToSpeaking() {
 // networkTask -> transitionToListening()
 // ( networkTask -> webSocket.loop() -> webSocketEvent(WStype_TEXT, ...) -> (sets scheduleListeningRestart) -> networkTask -> transitionToListening() )
 void transitionToListening() {
-    deviceState = PROCESSING;   
+    deviceState = PROCESSING;
     scheduleListeningRestart = false;
     Serial.println("Transitioning to listening mode");
 
     i2sInputFlushScheduled = true;
     i2sOutputFlushScheduled = true;
+
+    // Clear audio send queue to discard any stale audio
+    clearAudioSendQueue();
 
     Serial.println("Transitioned to listening mode");
 
@@ -334,12 +348,25 @@ void micTask(void *parameter) {
                                               micOpusPacketCount, encodedBytes, MIC_OPUS_FRAME_BYTES);
                             }
 
-                            // Send Opus packet via WebSocket
-                            xSemaphoreTake(wsMutex, portMAX_DELAY);
-                            if (webSocket.isConnected() && deviceState == LISTENING) {
-                                webSocket.sendBIN(micOpusPacket, encodedBytes);
+                            // Put Opus packet into queue (non-blocking)
+                            // networkTask will consume and send via WebSocket
+                            if (audioSendQueue != NULL && deviceState == LISTENING) {
+                                AudioPacket packet;
+                                memcpy(packet.data, micOpusPacket, encodedBytes);
+                                packet.length = encodedBytes;
+
+                                // Use non-blocking send to avoid mic task being blocked
+                                if (xQueueSend(audioSendQueue, &packet, 0) != pdTRUE) {
+                                    // Queue full - drop oldest packet and try again
+                                    AudioPacket discarded;
+                                    xQueueReceive(audioSendQueue, &discarded, 0);
+                                    xQueueSend(audioSendQueue, &packet, 0);
+                                    queueDropCount++;
+                                    if (queueDropCount % 10 == 1) {
+                                        Serial.printf("[MIC-OPUS] Queue full, dropped %d packets\n", queueDropCount);
+                                    }
+                                }
                             }
-                            xSemaphoreGive(wsMutex);
                         } else {
                             Serial.printf("[MIC-OPUS] Encode error: %d\n", encodedBytes);
                         }
@@ -530,6 +557,7 @@ void toggleChatState() {
             xSemaphoreTake(wsMutex, portMAX_DELAY);
             webSocket.sendTXT("{\"type\":\"instruction\",\"msg\":\"STOP_SESSION\"}");
             xSemaphoreGive(wsMutex);
+            clearAudioSendQueue();  // Clear any pending audio
             deviceState = IDLE;
             break;
         case SPEAKING:
@@ -539,6 +567,7 @@ void toggleChatState() {
             xSemaphoreGive(wsMutex);
             scheduleListeningRestart = false;
             i2sOutputFlushScheduled = true;
+            clearAudioSendQueue();  // Clear any pending audio
             deviceState = IDLE;
             break;
         default:
@@ -549,12 +578,43 @@ void toggleChatState() {
 
 // networkTask -> webSocket.loop()
 void networkTask(void *parameter) {
+    // Create audio send queue
+    audioSendQueue = xQueueCreate(AUDIO_SEND_QUEUE_SIZE, sizeof(AudioPacket));
+    if (audioSendQueue == NULL) {
+        Serial.println("[NET] Failed to create audio send queue!");
+    } else {
+        Serial.printf("[NET] Audio send queue created, size=%d packets (~%dms buffer)\n",
+                      AUDIO_SEND_QUEUE_SIZE, AUDIO_SEND_QUEUE_SIZE * MIC_OPUS_FRAME_MS);
+    }
+
+    static int sendCount = 0;
+
     while (1) {
         xSemaphoreTake(wsMutex, portMAX_DELAY);
 
         // Check to see if a transition to listening mode is scheduled.
         if (scheduleListeningRestart && millis() >= scheduledTime) {
             transitionToListening();
+        }
+
+        // Send queued audio packets (process multiple packets per loop for efficiency)
+        if (audioSendQueue != NULL && webSocket.isConnected() && deviceState == LISTENING) {
+            AudioPacket packet;
+            int packetsSentThisLoop = 0;
+            const int maxPacketsPerLoop = 5;  // Limit to avoid starving webSocket.loop()
+
+            while (packetsSentThisLoop < maxPacketsPerLoop &&
+                   xQueueReceive(audioSendQueue, &packet, 0) == pdTRUE) {
+                webSocket.sendBIN(packet.data, packet.length);
+                packetsSentThisLoop++;
+                sendCount++;
+
+                if (sendCount <= 5 || sendCount % 100 == 0) {
+                    int queueRemaining = uxQueueMessagesWaiting(audioSendQueue);
+                    Serial.printf("[NET] Sent pkt#%d, len=%d, queue=%d\n",
+                                  sendCount, packet.length, queueRemaining);
+                }
+            }
         }
 
         webSocket.loop();
