@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import type { RawData } from "npm:@types/ws";
-import { createOpusPacketizer, isDev } from "../utils.ts";
+import { createOpusPacketizer, createOpusDecoder, isDev } from "../utils.ts";
 import * as path from "node:path";
 
 // Create a WAV header for PCM data
@@ -37,6 +37,7 @@ export const connectToEcho = async ({
     console.log("[ECHO] PCM output will be saved to:", TMP_DIR);
 
     const opus = createOpusPacketizer((packet) => ws.send(packet));
+    const inputDecoder = createOpusDecoder();  // Decode 16kHz Opus from ESP32
     let audioChunks: Buffer[] = [];
     let isRecording = false;
     let recordTimer: ReturnType<typeof setTimeout> | null = null;
@@ -91,9 +92,16 @@ export const connectToEcho = async ({
     // Handle messages from ESP32
     ws.on("message", (data: RawData, isBinary: boolean) => {
         if (isBinary && isRecording) {
-            audioChunks.push(Buffer.from(data as Buffer));
-            if (isDev && connectionPcmFile) {
-                connectionPcmFile.write(data as Buffer);
+            // Decode Opus to PCM (16kHz) from ESP32
+            try {
+                const pcmData = inputDecoder.decode(data as Buffer);
+                const pcmBuffer = Buffer.from(pcmData);
+                audioChunks.push(pcmBuffer);
+                if (isDev && connectionPcmFile) {
+                    connectionPcmFile.write(pcmBuffer);
+                }
+            } catch (err) {
+                console.error("[ECHO] Opus decode error:", err);
             }
         } else if (!isBinary) {
             console.log("[ECHO] ESP32 text:", (data as Buffer).toString("utf-8"));

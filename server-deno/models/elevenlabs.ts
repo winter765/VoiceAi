@@ -10,9 +10,11 @@ import {
 import { addConversation, getDeviceInfo } from "../supabase.ts";
 import {
 	createOpusPacketizer,
+	createOpusDecoder,
 	isDev,
 	elevenLabsApiKey,
 	SAMPLE_RATE,
+	INPUT_SAMPLE_RATE,
 } from "../utils.ts";
 
 // Calculate audio level for debugging
@@ -76,6 +78,7 @@ export const connectToElevenLabs = async ({
 
 	const { user, supabase } = payload;
 	const opus = createOpusPacketizer((packet) => ws.send(packet));
+	const inputDecoder = createOpusDecoder();  // Decode 16kHz Opus from ESP32
 
 	// Queue messages until ElevenLabs connection is ready.
 	const messageQueue: Array<{ data: RawData; isBinary: boolean }> = [];
@@ -89,36 +92,44 @@ export const connectToElevenLabs = async ({
 	const handleClientMessage = async (data: any, isBinary: boolean) => {
 		try {
 			if (isBinary) {
-				if (isDev && connectionPcmFile) {
-					await connectionPcmFile.write(data);
-				}
+				// Decode Opus to PCM (16kHz) from ESP32
+				try {
+					const pcmData = inputDecoder.decode(data);
+					const pcmBuffer = Buffer.from(pcmData);
 
-				// Send audio to ElevenLabs using the expected input sample rate.
-				if (isElevenLabsConnected && elevenLabsConnection) {
-					const sourceBuffer = Buffer.from(data);
-					const pcmForEleven = resamplePcm16Mono(
-						sourceBuffer,
-						SAMPLE_RATE,
-						elevenInputSampleRate,
-					);
-					const base64Data = pcmForEleven.toString("base64");
-
-					const audioLevel = calculateAudioLevel(data);
-					console.log(
-						`Sending audio chunk to ElevenLabs: raw=${data.length} bytes, resampled=${pcmForEleven.length} bytes, inRate=${SAMPLE_RATE}, elevenInRate=${elevenInputSampleRate}, level=${audioLevel}`,
-					);
-
-					try {
-						elevenLabsConnection.sendMessage({
-							user_audio_chunk: base64Data,
-						});
-					} catch (error) {
-						console.error("Error sending audio to ElevenLabs:", error);
+					if (isDev && connectionPcmFile) {
+						await connectionPcmFile.write(pcmBuffer);
 					}
-				} else {
-					console.log(
-						`Cannot send audio - ElevenLabs connected: ${isElevenLabsConnected}, connection exists: ${!!elevenLabsConnection}`,
-					);
+
+					// Send audio to ElevenLabs using the expected input sample rate.
+					if (isElevenLabsConnected && elevenLabsConnection) {
+						// Resample from decoded 16kHz to ElevenLabs expected rate if needed
+						const pcmForEleven = resamplePcm16Mono(
+							pcmBuffer,
+							INPUT_SAMPLE_RATE,  // 16kHz - decoded from Opus
+							elevenInputSampleRate,
+						);
+						const base64Data = pcmForEleven.toString("base64");
+
+						const audioLevel = calculateAudioLevel(pcmBuffer);
+						console.log(
+							`Sending audio chunk to ElevenLabs: opus=${data.length} bytes, pcm=${pcmBuffer.length} bytes, resampled=${pcmForEleven.length} bytes, inRate=${INPUT_SAMPLE_RATE}, elevenInRate=${elevenInputSampleRate}, level=${audioLevel}`,
+						);
+
+						try {
+							elevenLabsConnection.sendMessage({
+								user_audio_chunk: base64Data,
+							});
+						} catch (error) {
+							console.error("Error sending audio to ElevenLabs:", error);
+						}
+					} else {
+						console.log(
+							`Cannot send audio - ElevenLabs connected: ${isElevenLabsConnected}, connection exists: ${!!elevenLabsConnection}`,
+						);
+					}
+				} catch (err) {
+					console.error("Opus decode error:", err);
 				}
 			} else {
 				const message = JSON.parse(data.toString("utf-8"));

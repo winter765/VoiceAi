@@ -3,7 +3,7 @@ import type { RawData } from "npm:@types/ws";
 import { RealtimeClient } from "../realtime/client.js";
 import { RealtimeUtils } from "../realtime/utils.js";
 import { addConversation, getDeviceInfo } from "../supabase.ts";
-import { createOpusPacketizer, isDev, openaiApiKey, defaultOpenAIVoice } from "../utils.ts";
+import { createOpusPacketizer, createOpusDecoder, isDev, openaiApiKey, defaultOpenAIVoice } from "../utils.ts";
 
 const sendFirstMessage = (client: RealtimeClient, firstMessage: string) => {
     const event = {
@@ -38,6 +38,7 @@ export const connectToOpenAI = async ({
     const { user, supabase } = payload;
 
     const opus = createOpusPacketizer((packet) => ws.send(packet));
+    const inputDecoder = createOpusDecoder();  // Decode 16kHz Opus from ESP32
 
     let currentItemId: string | null = null;
     let currentCallId: string | null = null;
@@ -211,22 +212,28 @@ export const connectToOpenAI = async ({
 
             // for esp32
             if (isBinary) {
-                const base64Data = data.toString("base64");
+                // Decode Opus to PCM (16kHz) from ESP32
+                try {
+                    const pcmData = inputDecoder.decode(data);
+                    const pcmBuffer = Buffer.from(pcmData);
+                    const base64Data = pcmBuffer.toString("base64");
 
-                // Convert binary PCM16 data to base64 for OpenAI Realtime API
-                event = {
-                    event_id: RealtimeUtils.generateId("evt_"), // Generate unique ID
-                    type: "input_audio_buffer.append",
-                    audio: base64Data,
-                };
-                // Write the raw PCM data to file for debugging if enabled.
-                // Also write the base64 data to a separate file
-                if (isDev) {
-                    if (connectionPcmFile) {
-                        await connectionPcmFile.write(data);
+                    // Convert binary PCM16 data to base64 for OpenAI Realtime API
+                    event = {
+                        event_id: RealtimeUtils.generateId("evt_"), // Generate unique ID
+                        type: "input_audio_buffer.append",
+                        audio: base64Data,
+                    };
+                    // Write the decoded PCM data to file for debugging if enabled.
+                    if (isDev) {
+                        if (connectionPcmFile) {
+                            await connectionPcmFile.write(pcmBuffer);
+                        }
                     }
+                    client.realtime.send(event.type, event);
+                } catch (err) {
+                    console.error("Opus decode error:", err);
                 }
-                client.realtime.send(event.type, event);
             } else { // Manual VAD
                 const message = JSON.parse(data.toString("utf-8"));
 

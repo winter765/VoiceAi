@@ -321,7 +321,7 @@ void setup() {
 
   xTaskCreatePinnedToCore(micTask,           // Function
                           "Microphone Task", // Name
-                          4096,              // Stack size
+                          16384,             // Stack size (16KB for Opus encoder)
                           NULL,              // Parameters
                           4,                 // Priority
                           NULL,              // Handle

@@ -3,7 +3,7 @@ import { getUserByEmail } from "./supabase.ts";
 import { SupabaseClient } from "@supabase/supabase-js";
 import crypto from "node:crypto";
 import { Buffer } from "node:buffer";
-import { Encoder } from "@evan/opus";
+import { Encoder, Decoder } from "@evan/opus";
 
 export const defaultVolume = 50;
 
@@ -11,13 +11,16 @@ export const defaultGeminiVoice = "Sadachbia";
 export const defaultOpenAIVoice = "ash";
 export const defaultGrokVoice = "Ara";
 
-// Define your audio parameters
+// Output audio parameters (to ESP32) - 24kHz Opus encoded
 export const SAMPLE_RATE = 24000; // For example, 24000 Hz
 const CHANNELS = 1; // Mono (set to 2 if you have stereo)
 const FRAME_DURATION = 20; // Frame length in ms (20ms is standard, widely supported)
 const BYTES_PER_SAMPLE = 2; // 16-bit PCM: 2 bytes per sample
 const FRAME_SIZE = (SAMPLE_RATE * FRAME_DURATION / 1000) * CHANNELS *
     BYTES_PER_SAMPLE; // 960 bytes for 24000 Hz mono 16-bit
+
+// Input audio parameters (from ESP32) - 16kHz Opus encoded
+export const INPUT_SAMPLE_RATE = 16000;
 
 export function createOpusEncoder() {
     const enc = new Encoder({
@@ -29,6 +32,15 @@ export function createOpusEncoder() {
     enc.expert_frame_duration = FRAME_DURATION;
     enc.bitrate = 24000;
     return enc;
+}
+
+// Create Opus decoder for input audio (16kHz from ESP32)
+export function createOpusDecoder() {
+    const dec = new Decoder({
+        channels: CHANNELS,
+        sample_rate: INPUT_SAMPLE_RATE,  // 16kHz - same as before when using raw PCM
+    });
+    return dec;
 }
 
 export function createOpusPacketizer(

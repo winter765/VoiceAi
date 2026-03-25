@@ -4,6 +4,7 @@
 #include "AudioTools.h"
 #include "AudioTools/AudioCodecs/CodecOpus.h"
 #include "Config.h"
+#include <opus.h>
 
 extern SemaphoreHandle_t wsMutex;
 extern WebSocketsClient webSocket;
@@ -25,10 +26,19 @@ constexpr size_t AUDIO_BUFFER_SIZE = 1024 * 10;     // total bytes in the buffer
 constexpr size_t AUDIO_CHUNK_SIZE  = 1024;         // ideal read/write chunk size
 extern OpusAudioDecoder opusDecoder;
 extern BufferRTOS<uint8_t> audioBuffer;
-extern I2SStream i2s; 
+extern I2SStream i2s;
 extern VolumeStream volume;
 extern QueueStream<uint8_t> queue;
 extern StreamCopy copier;
+
+// AUDIO INPUT - Opus Encoder
+// Opus frame: 20ms at 16kHz = 320 samples = 640 bytes PCM
+constexpr int MIC_OPUS_FRAME_MS = 20;
+constexpr int MIC_OPUS_SAMPLE_RATE = 16000;  // Must match MIC_SAMPLE_RATE in Config.cpp
+constexpr int MIC_OPUS_FRAME_SAMPLES = (MIC_OPUS_SAMPLE_RATE * MIC_OPUS_FRAME_MS / 1000);  // 320 samples
+constexpr int MIC_OPUS_FRAME_BYTES = MIC_OPUS_FRAME_SAMPLES * 2;  // 640 bytes (16-bit)
+constexpr int MIC_OPUS_MAX_PACKET_SIZE = 256;  // Max Opus packet size for voice
+constexpr int MIC_OPUS_BITRATE = 24000;  // 24 kbps for voice
 
 // NEW for pitch shift
 extern VolumeStream volumePitch;

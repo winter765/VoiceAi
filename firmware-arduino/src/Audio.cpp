@@ -247,8 +247,31 @@ const int MIC_READ_SAMPLES = 160; // 160 samples = 10ms at 16kHz
 static int32_t mic_buf_32[MIC_READ_SAMPLES];
 static int16_t mic_buf_16[MIC_READ_SAMPLES];
 
+// Opus encoder for uplink audio
+static OpusEncoder* micOpusEncoder = nullptr;
+static int16_t micOpusFrameBuf[MIC_OPUS_FRAME_SAMPLES];  // 320 samples for 20ms frame
+static int micOpusFramePos = 0;  // Current position in frame buffer
+static uint8_t micOpusPacket[MIC_OPUS_MAX_PACKET_SIZE];  // Encoded packet buffer
+static int micOpusPacketCount = 0;  // For logging
+
 void micTask(void *parameter) {
     Serial.println("[MIC] Initializing I2S input...");
+
+    // Initialize Opus encoder for 16kHz mono voice
+    int opusError;
+    micOpusEncoder = opus_encoder_create(MIC_SAMPLE_RATE, CHANNELS, OPUS_APPLICATION_VOIP, &opusError);
+    if (opusError != OPUS_OK || !micOpusEncoder) {
+        Serial.printf("[MIC] Failed to create Opus encoder, error: %d\n", opusError);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    // Configure encoder for voice
+    opus_encoder_ctl(micOpusEncoder, OPUS_SET_BITRATE(MIC_OPUS_BITRATE));
+    opus_encoder_ctl(micOpusEncoder, OPUS_SET_COMPLEXITY(5));  // Balance between quality and CPU
+    opus_encoder_ctl(micOpusEncoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
+    Serial.printf("[MIC] Opus encoder initialized: %dHz, %dkbps, %dms frames\n",
+                  MIC_SAMPLE_RATE, MIC_OPUS_BITRATE/1000, MIC_OPUS_FRAME_MS);
 
     // Configure I2S input as 32-bit (mic outputs 24-bit data in 32-bit frame)
     auto i2sConfig = i2sInput.defaultConfig(RX_MODE);
@@ -267,6 +290,7 @@ void micTask(void *parameter) {
         if (i2sInputFlushScheduled) {
             i2sInputFlushScheduled = false;
             i2sInput.flush();
+            micOpusFramePos = 0;  // Reset Opus frame buffer on flush
         }
 
         if (deviceState == LISTENING && webSocket.isConnected()) {
@@ -283,13 +307,46 @@ void micTask(void *parameter) {
                     mic_buf_16[i] = (int16_t)val;
                 }
 
-                // Send 16-bit PCM via WebSocket
-                size_t sendBytes = samplesRead * sizeof(int16_t);
-                xSemaphoreTake(wsMutex, portMAX_DELAY);
-                if (webSocket.isConnected() && deviceState == LISTENING) {
-                    webSocket.sendBIN((uint8_t*)mic_buf_16, sendBytes);
+                // Accumulate samples into Opus frame buffer and encode when full
+                int samplesProcessed = 0;
+                while (samplesProcessed < samplesRead) {
+                    // Copy samples to frame buffer
+                    int samplesToCopy = min(samplesRead - samplesProcessed,
+                                           MIC_OPUS_FRAME_SAMPLES - micOpusFramePos);
+                    memcpy(&micOpusFrameBuf[micOpusFramePos],
+                           &mic_buf_16[samplesProcessed],
+                           samplesToCopy * sizeof(int16_t));
+                    micOpusFramePos += samplesToCopy;
+                    samplesProcessed += samplesToCopy;
+
+                    // When frame buffer is full, encode and send
+                    if (micOpusFramePos >= MIC_OPUS_FRAME_SAMPLES) {
+                        int encodedBytes = opus_encode(micOpusEncoder,
+                                                       micOpusFrameBuf,
+                                                       MIC_OPUS_FRAME_SAMPLES,
+                                                       micOpusPacket,
+                                                       MIC_OPUS_MAX_PACKET_SIZE);
+
+                        if (encodedBytes > 0) {
+                            micOpusPacketCount++;
+                            if (micOpusPacketCount <= 5 || micOpusPacketCount % 50 == 0) {
+                                Serial.printf("[MIC-OPUS] pkt#%d encoded=%dB (from %dB PCM)\n",
+                                              micOpusPacketCount, encodedBytes, MIC_OPUS_FRAME_BYTES);
+                            }
+
+                            // Send Opus packet via WebSocket
+                            xSemaphoreTake(wsMutex, portMAX_DELAY);
+                            if (webSocket.isConnected() && deviceState == LISTENING) {
+                                webSocket.sendBIN(micOpusPacket, encodedBytes);
+                            }
+                            xSemaphoreGive(wsMutex);
+                        } else {
+                            Serial.printf("[MIC-OPUS] Encode error: %d\n", encodedBytes);
+                        }
+
+                        micOpusFramePos = 0;  // Reset for next frame
+                    }
                 }
-                xSemaphoreGive(wsMutex);
             }
 
             vTaskDelay(1);
