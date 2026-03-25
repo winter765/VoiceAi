@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import type { RawData } from "npm:@types/ws";
 import { WebSocket } from "npm:ws";
 import { addConversation, getDeviceInfo } from "../supabase.ts";
-import { createOpusPacketizer, isDev, xaiApiKey, defaultGrokVoice } from "../utils.ts";
+import { createOpusPacketizer, createOpusDecoder, isDev, xaiApiKey, defaultGrokVoice } from "../utils.ts";
 
 const XAI_REALTIME_URL = "wss://api.x.ai/v1/realtime";
 
@@ -23,6 +23,7 @@ export const connectToGrok = async ({
     const voice = user.personality?.oai_voice ?? defaultGrokVoice;
 
     const opus = createOpusPacketizer((packet) => ws.send(packet));
+    const inputDecoder = createOpusDecoder();  // Decode 16kHz Opus from ESP32
 
     const grokWs = new WebSocket(XAI_REALTIME_URL, {
         headers: {
@@ -174,11 +175,18 @@ export const connectToGrok = async ({
 
     const messageHandler = async (data: RawData, isBinary: boolean) => {
         if (isBinary) {
-            const base64Data = (data as Buffer).toString("base64");
-            grokWs.send(JSON.stringify({ type: "input_audio_buffer.append", audio: base64Data }));
+            // Decode Opus to PCM (16kHz) from ESP32
+            try {
+                const pcmData = inputDecoder.decode(data as Buffer);
+                const pcmBuffer = Buffer.from(pcmData);
+                const base64Data = pcmBuffer.toString("base64");
+                grokWs.send(JSON.stringify({ type: "input_audio_buffer.append", audio: base64Data }));
 
-            if (isDev && connectionPcmFile) {
-                await connectionPcmFile.write(data as Buffer);
+                if (isDev && connectionPcmFile) {
+                    await connectionPcmFile.write(pcmBuffer);
+                }
+            } catch (err) {
+                console.error("Opus decode error:", err);
             }
             return;
         }

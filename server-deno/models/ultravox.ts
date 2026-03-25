@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import type { RawData } from "npm:@types/ws";
 import { WebSocket } from "npm:ws";
 import { addConversation, getDeviceInfo } from "../supabase.ts";
-import { createOpusPacketizer, isDev, ultravoxApiKey } from "../utils.ts";
+import { createOpusPacketizer, createOpusDecoder, isDev, ultravoxApiKey } from "../utils.ts";
 
 const ULTRAVOX_API_URL = "https://api.ultravox.ai/api/calls";
 
@@ -81,6 +81,10 @@ export const connectToUltravox = async ({
     let outputTranscript = "";
     let audioPacketCount = 0;
     let totalAudioBytes = 0;
+
+    // Opus decoder for input audio from ESP32 (16kHz)
+    const inputDecoder = createOpusDecoder();
+    let decodedPcmBytes = 0;
 
     let opusPacketsSent = 0;
     const opus = createOpusPacketizer((packet) => {
@@ -297,13 +301,23 @@ export const connectToUltravox = async ({
             if (isSessionActive && uvWs?.readyState === WebSocket.OPEN) {
                 audioPacketCount++;
                 totalAudioBytes += (data as Buffer).length;
-                if (audioPacketCount % 100 === 1) {
-                    console.log(`[DEBUG] ESP32 audio: packet #${audioPacketCount}, this=${(data as Buffer).length}B, total=${totalAudioBytes}B`);
-                }
-                uvWs.send(data as Buffer);
 
-                if (isDev && connectionPcmFile) {
-                    connectionPcmFile.write(data as Buffer);
+                // Decode Opus to PCM (16kHz) before forwarding to Ultravox
+                try {
+                    const pcmData = inputDecoder.decode(data as Buffer);
+                    decodedPcmBytes += pcmData.length;
+
+                    if (audioPacketCount % 100 === 1) {
+                        console.log(`[DEBUG] ESP32 audio: packet #${audioPacketCount}, opus=${(data as Buffer).length}B, pcm=${pcmData.length}B, totalPcm=${decodedPcmBytes}B`);
+                    }
+
+                    uvWs.send(Buffer.from(pcmData));
+
+                    if (isDev && connectionPcmFile) {
+                        connectionPcmFile.write(Buffer.from(pcmData));
+                    }
+                } catch (err) {
+                    console.error("[UV] Opus decode error:", err);
                 }
             }
             return;

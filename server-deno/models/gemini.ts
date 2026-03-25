@@ -8,7 +8,7 @@ import {
     Modality,
     Session,
 } from "npm:@google/genai";
-import { createOpusPacketizer, geminiApiKey, isDev, defaultGeminiVoice } from "../utils.ts";
+import { createOpusPacketizer, createOpusDecoder, geminiApiKey, isDev, defaultGeminiVoice } from "../utils.ts";
 import { addConversation } from "../supabase.ts";
 
 export const connectToGemini = async ({
@@ -23,6 +23,7 @@ export const connectToGemini = async ({
     const voiceName = user.personality?.oai_voice ?? defaultGeminiVoice;
 
     const opus = createOpusPacketizer((packet) => ws.send(packet));
+    const inputDecoder = createOpusDecoder();  // Decode 16kHz Opus from ESP32
 
     console.log(`Connecting with Gemini key "${geminiApiKey?.slice(0, 3)}..."`);
 
@@ -223,14 +224,16 @@ export const connectToGemini = async ({
     ws.on("message", (data: any, isBinary: boolean) => {
         try {
             if (isBinary) {
-                // Handle binary audio data from ESP32
-                const base64Data = data.toString("base64");
+                // Decode Opus to PCM (16kHz) from ESP32
+                const pcmData = inputDecoder.decode(data);
+                const pcmBuffer = Buffer.from(pcmData);
+                const base64Data = pcmBuffer.toString("base64");
 
                 if (isDev && connectionPcmFile) {
-                    connectionPcmFile.write(data);
+                    connectionPcmFile.write(pcmBuffer);
                 }
 
-                // Send audio to Gemini
+                // Send decoded PCM audio to Gemini
                 geminiSession?.sendRealtimeInput({
                     audio: {
                         data: base64Data,

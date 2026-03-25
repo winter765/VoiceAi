@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import type { RawData } from "npm:@types/ws";
 import { WebSocket } from "npm:ws";
 import { addConversation, getDeviceInfo } from "../supabase.ts";
-import { createOpusPacketizer, isDev, humeApiKey, downsamplePcm, extractPcmFromWav, boostLimitPCM16LEInPlace } from "../utils.ts";
+import { createOpusPacketizer, createOpusDecoder, isDev, humeApiKey, downsamplePcm, extractPcmFromWav, boostLimitPCM16LEInPlace, INPUT_SAMPLE_RATE } from "../utils.ts";
 
 export const connectToHume = ({
     ws,
@@ -16,6 +16,7 @@ export const connectToHume = ({
     const { personality } = user;
 
     const opus = createOpusPacketizer((packet) => ws.send(packet));
+    const inputDecoder = createOpusDecoder();  // Decode 16kHz Opus from ESP32
 
     console.log(`Connecting to Hume with key "${humeApiKey?.slice(0, 3)}..."`);
 
@@ -40,13 +41,13 @@ export const connectToHume = ({
         console.log("✅ Connected to Hume WebSocket API successfully");
         isConnected = true;
 
-        // Configure Hume session settings for input audio format
+        // Configure Hume session settings for input audio format (16kHz to match ESP32 mic)
         humeWs.send(JSON.stringify({
             type: "session_settings",
             audio: {
                 encoding: "linear16",
                 channels: 1,
-                sample_rate: 24000,
+                sample_rate: INPUT_SAMPLE_RATE,  // 16000 Hz - same as ESP32 mic
             },
             system_prompt: systemPrompt,
         }));
@@ -244,21 +245,27 @@ export const connectToHume = ({
     const messageHandler = async (data: RawData, isBinary: boolean) => {
         try {
             if (isBinary) {
-                // Handle audio data from ESP32
-                const base64Audio = data.toString("base64");
+                // Decode Opus to PCM (16kHz) from ESP32
+                try {
+                    const pcmData = inputDecoder.decode(data as Buffer);
+                    const pcmBuffer = Buffer.from(pcmData);
+                    const base64Audio = pcmBuffer.toString("base64");
 
-                const audioMessage: HumeAudioInput = {
-                    type: "audio_input",
-                    data: base64Audio,
-                };
+                    const audioMessage: HumeAudioInput = {
+                        type: "audio_input",
+                        data: base64Audio,
+                    };
 
-                if (isConnected) {
-                    humeWs.send(JSON.stringify(audioMessage));
-                }
+                    if (isConnected) {
+                        humeWs.send(JSON.stringify(audioMessage));
+                    }
 
-                // Write to debug file if enabled
-                if (isDev && connectionPcmFile) {
-                    await connectionPcmFile.write(data as Buffer);
+                    // Write decoded PCM to debug file if enabled
+                    if (isDev && connectionPcmFile) {
+                        await connectionPcmFile.write(pcmBuffer);
+                    }
+                } catch (err) {
+                    console.error("Opus decode error:", err);
                 }
             }
         } catch (error) {
