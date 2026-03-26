@@ -22,7 +22,7 @@ extern const int CHANNELS;         // Mono
 extern const int BITS_PER_SAMPLE; // 16-bit audio
 
 // AUDIO OUTPUT
-constexpr size_t AUDIO_BUFFER_SIZE = 1024 * 10;     // total bytes in the buffer
+constexpr size_t AUDIO_BUFFER_SIZE = 1024 * 6;      // 6KB buffer (reduced from 10KB)
 constexpr size_t AUDIO_CHUNK_SIZE  = 1024;         // ideal read/write chunk size
 extern OpusAudioDecoder opusDecoder;
 extern BufferRTOS<uint8_t> audioBuffer;
@@ -38,11 +38,11 @@ constexpr int MIC_OPUS_SAMPLE_RATE = 16000;  // Must match MIC_SAMPLE_RATE in Co
 constexpr int MIC_OPUS_FRAME_SAMPLES = (MIC_OPUS_SAMPLE_RATE * MIC_OPUS_FRAME_MS / 1000);  // 320 samples
 constexpr int MIC_OPUS_FRAME_BYTES = MIC_OPUS_FRAME_SAMPLES * 2;  // 640 bytes (16-bit)
 constexpr int MIC_OPUS_MAX_PACKET_SIZE = 256;  // Max Opus packet size for voice
-constexpr int MIC_OPUS_BITRATE = 24000;  // 24 kbps for voice
+constexpr int MIC_OPUS_BITRATE = 16000;  // 16 kbps for voice (optimized for public network)
 
 // Audio send queue for decoupling mic task from network task
 // This prevents network latency from blocking audio capture
-constexpr int AUDIO_SEND_QUEUE_SIZE = 30;  // ~600ms buffer at 20ms/packet
+constexpr int AUDIO_SEND_QUEUE_SIZE = 15;  // ~300ms buffer (reduced from 30)
 
 // Structure for audio packet in queue
 struct AudioPacket {

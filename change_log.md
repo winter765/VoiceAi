@@ -1,5 +1,96 @@
 # Change Log
 
+## 2026-03-26
+
+### 公网带宽优化与内存泄漏修复
+
+#### firmware-arduino
+
+- **Audio.h**：
+  - `MIC_OPUS_BITRATE`：24kbps → 16kbps（适配公网带宽限制）
+  - `AUDIO_BUFFER_SIZE`：10KB → 6KB（减少内存占用）
+  - `AUDIO_SEND_QUEUE_SIZE`：30 → 15 包（减少缓冲）
+- **Audio.cpp**：
+  - 启用 Opus DTX (Discontinuous Transmission)，静音时跳过包发送，节省 ~50% 带宽
+  - `transitionToListening()` 中添加 `audioBuffer.reset()` 清理音频缓冲
+- **platformio.ini**：
+  - 添加 `WEBSOCKETS_MAX_DATA_SIZE=4096`（从默认 15KB 减至 4KB）
+  - **根因**：WebSocket 库默认 15KB 接收缓冲导致内存碎片化，多轮对话后 Min free 降至 2KB 引发崩溃
+- **Config.cpp**：DEV_MODE WebSocket 配置改为走 nginx（port=80, path="/ws"）
+
+#### server-deno
+
+- **models/ultravox.ts**：
+  - 连接建立时异步预取设备音量信息（`cachedVolume`）
+  - `sendResponseCreated()` 从 async 改为同步，移除数据库查询阻塞
+  - **效果**：消除 AI 回复时的延迟（原来等待 DB 查询才发音频）
+
+#### 调试发现
+
+- 24kbps 在公网环境导致 WebSocket 写超时（errno: 11 "No more processes"），队列堆积丢包
+- 16kbps + DTX 可稳定支持多轮对话
+- WebSocket 大缓冲区（15KB）是内存碎片化的主要原因
+
+---
+
+## 2026-03-25
+
+### 上行音频 Opus 编码与发送队列解耦
+
+#### firmware-arduino
+
+- **Audio.h**：添加 Opus 编码器常量
+  - `MIC_OPUS_SAMPLE_RATE`：16kHz
+  - `MIC_OPUS_BITRATE`：24kbps
+  - `MIC_OPUS_FRAME_MS`：20ms（320 samples = 640 bytes PCM）
+  - `MIC_OPUS_MAX_PACKET_SIZE`：256 bytes
+- **Audio.cpp**：
+  - `micTask` 实现 32-bit I2S → 16-bit PCM 转换 → Opus 编码
+  - 编码后数据通过 FreeRTOS 队列传递给 `networkTask`
+  - 网络发送与麦克风采集完全解耦，防止网络延迟阻塞音频采集
+- **Audio.h**：添加 `AudioPacket` 结构体和 `audioSendQueue`（30 packets, ~600ms 缓冲）
+- **main.cpp**：`micTask` 栈大小从 8KB 增至 16KB（Opus 编码器需要）
+
+#### server-deno
+
+- **utils.ts**：添加 `createOpusDecoder()` 函数（16kHz 单声道）
+- **所有 model 文件**（ultravox/openai/gemini/grok/hume/elevenlabs/echo）：
+  - 添加 `inputDecoder` Opus 解码器
+  - 接收 ESP32 发送的 Opus 包 → 解码为 PCM → 转发给 AI 提供商
+- **数据流**：ESP32 (16kHz PCM) → Opus (~24kbps) → Server → Opus decode (16kHz PCM) → AI
+
+#### 效果
+
+- 上行带宽从 ~256kbps (raw PCM) 降至 ~24kbps，减少 90%
+- 网络延迟不再阻塞麦克风采集，音频连续性显著改善
+
+---
+
+## 2026-03-24
+
+### 公网部署调试与注册流程修复
+
+#### firmware-arduino
+- **Config.cpp**：DEV_MODE 服务器地址改为公网 `35.162.7.133:80`，WebSocket 路径改为 `/ws`
+
+#### server-deno
+- **supabase.ts**：`getUserByEmail` 增加空数据防御，查询结果为空时抛出明确错误而非 undefined 崩溃
+- **supabase.ts**：`getSupabaseClient` 改用 `service_role` key 创建 Supabase client，解决公网 Supabase Cloud JWT Secret 不可获取导致的认证失败（新增 `SUPABASE_SERVICE_ROLE_KEY` 环境变量）
+
+#### frontend-nextjs
+- **app/(auth-pages)/login/page.tsx**、**register/page.tsx**：修复 Card 样式冲突（`shadow-none` 覆盖 `shadow-md`，`bg-transparent` 导致手机端卡片不可见）
+- **app/(auth-pages)/register/page.tsx**：修复注册流程执行顺序，先创建 `public.users` 记录再调用 `addUserToDeviceByMac` 绑定设备，避免因用户记录不存在导致绑定失败
+
+#### 公网部署（Lightsail）
+- 确认 Next.js standalone 模式需手动复制静态资源（`.next/static` → `.next/standalone/.next/static`，`public` → `.next/standalone/public`）
+- 确认 standalone 模式需将 `.env.local` 复制到 `.next/standalone/` 目录下，否则运行时读不到非 `NEXT_PUBLIC_` 环境变量
+- 确认 `NEXT_PUBLIC_` 前缀变量在 build 时注入，修改后需重新 build
+- Supabase Cloud 配置：关闭邮箱确认（Confirm email）、添加 `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- Deno 切换为非 DEV_MODE（`DEV_MODE=False`），监听 8080 端口匹配 nginx 配置
+- Ultravox 音色 ID 更新为 `c846dea0-4083-4313-be97-6bf0b7cdc344`（旧 ID 已失效）
+
+---
+
 ## 2026-03-23
 
 ### 完整注册流程：设备自注册 + Web注册 + 自动绑定

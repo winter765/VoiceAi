@@ -73,6 +73,15 @@ export const connectToUltravox = async ({
 
     const voice = payload.user.personality?.oai_voice || "Mark";
 
+    // Pre-fetch device info at connection start to avoid latency during audio playback
+    let cachedVolume = 100;
+    getDeviceInfo(supabase, user.user_id).then(device => {
+        cachedVolume = device?.volume ?? 100;
+        console.log(`[UV] Device info cached: volume=${cachedVolume}`);
+    }).catch(() => {
+        console.log("[UV] Failed to fetch device info, using default volume");
+    });
+
     // --- On-demand session state ---
     let uvWs: WebSocket | null = null;
     let isSessionActive = false;
@@ -95,23 +104,17 @@ export const connectToUltravox = async ({
         ws.send(packet);
     });
 
-    const sendResponseCreated = async () => {
+    const sendResponseCreated = () => {
         console.log("[DEBUG] Sending RESPONSE.CREATED to ESP32");
-        try {
-            const device = await getDeviceInfo(supabase, user.user_id);
-            opus.reset();
-            ws.send(
-                JSON.stringify({
-                    type: "server",
-                    msg: "RESPONSE.CREATED",
-                    volume_control: device?.volume ?? 100,
-                }),
-            );
-        } catch {
-            ws.send(JSON.stringify({ type: "server", msg: "RESPONSE.CREATED" }));
-        }
+        opus.reset();
+        // Use pre-cached volume to avoid DB query latency
+        ws.send(JSON.stringify({
+            type: "server",
+            msg: "RESPONSE.CREATED",
+            volume_control: cachedVolume,
+        }));
         createdAcked = true;
-        console.log("[DEBUG] RESPONSE.CREATED sent, createdAcked=true, audio forwarding enabled");
+        console.log(`[DEBUG] RESPONSE.CREATED sent, createdAcked=true, volume=${cachedVolume}`);
     };
 
     // Start a new Ultravox call session
@@ -166,7 +169,7 @@ export const connectToUltravox = async ({
                     createdSent = true;
                     // Buffer this chunk, send RESPONSE.CREATED, then flush buffered PCM
                     pcmQueue.push(Buffer.from(data));
-                    await sendResponseCreated();
+                    sendResponseCreated();
                     // Flush all buffered PCM chunks
                     while (pcmQueue.length > 0) {
                         opus.push(pcmQueue.shift()!);

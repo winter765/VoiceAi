@@ -96,16 +96,9 @@ unsigned long getSpeakingDuration() {
 // networkTask -> webSocket.loop() -> webSocketEvent(WStype_TEXT, ...) -> transitionToSpeaking()
 void transitionToSpeaking() {
     vTaskDelay(50);
-
     i2sInputFlushScheduled = true;
-    
     deviceState = SPEAKING;
-    // digitalWrite(I2S_SD_OUT, HIGH);  // disabled - xiaozhi has no PA pin
     speakingStartTime = millis();
-    
-    // webSocket.enableHeartbeat(30000, 15000, 3);
-    
-    Serial.println("Transitioned to speaking mode");
 }
 
 // networkTask -> transitionToListening()
@@ -113,19 +106,11 @@ void transitionToSpeaking() {
 void transitionToListening() {
     deviceState = PROCESSING;
     scheduleListeningRestart = false;
-    Serial.println("Transitioning to listening mode");
-
     i2sInputFlushScheduled = true;
     i2sOutputFlushScheduled = true;
-
-    // Clear audio send queue to discard any stale audio
     clearAudioSendQueue();
-
-    Serial.println("Transitioned to listening mode");
-
+    audioBuffer.reset();
     deviceState = LISTENING;
-    // digitalWrite(I2S_SD_OUT, LOW);  // disabled - xiaozhi has no PA pin
-    // webSocket.disableHeartbeat();
 }
 
 // audioStreamTask: manual 16→32 bit pipeline matching xiaozhi bread-compact-wifi
@@ -183,12 +168,24 @@ void audioStreamTask(void *parameter) {
     Serial.println("[SPK] I2S TX ready: 32-bit, 24kHz, stereo frame (legacy driver)");
 
     // === Main loop: read 16-bit PCM from audioBuffer, convert to 32-bit stereo, write to I2S ===
+    static unsigned long lastMemLog = 0;
+
     while (1) {
         if (i2sOutputFlushScheduled) {
             i2sOutputFlushScheduled = false;
             audioBuffer.reset();
             i2s_zero_dma_buffer(I2S_PORT_OUT);
             Serial.println("[SPK] Output flushed");
+        }
+
+        // Memory monitoring every 5 seconds
+        if (millis() - lastMemLog > 5000) {
+            lastMemLog = millis();
+            uint32_t freeHeap = ESP.getFreeHeap();
+            Serial.printf("[MEM] Free heap: %d, Min free: %d, audioBuffer: %d/%d\n",
+                          freeHeap, ESP.getMinFreeHeap(),
+                          audioBuffer.available(), AUDIO_BUFFER_SIZE);
+
         }
 
         if (deviceState == SPEAKING && audioBuffer.available() > 0) {
@@ -280,10 +277,11 @@ void micTask(void *parameter) {
         return;
     }
 
-    // Configure encoder for voice
+    // Configure encoder for voice with bandwidth optimization
     opus_encoder_ctl(micOpusEncoder, OPUS_SET_BITRATE(MIC_OPUS_BITRATE));
     opus_encoder_ctl(micOpusEncoder, OPUS_SET_COMPLEXITY(5));  // Balance between quality and CPU
     opus_encoder_ctl(micOpusEncoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
+    opus_encoder_ctl(micOpusEncoder, OPUS_SET_DTX(1));  // Enable DTX: skip packets during silence
     Serial.printf("[MIC] Opus encoder initialized: %dHz, %dkbps, %dms frames\n",
                   MIC_SAMPLE_RATE, MIC_OPUS_BITRATE/1000, MIC_OPUS_FRAME_MS);
 
@@ -487,9 +485,9 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         static int binCount = 0;
         binCount++;
         size_t processed = opusDecoder.write(payload, length);
-        if (binCount % 20 == 1) {
-            Serial.printf("[OPUS] pkt#%d in=%d processed=%d bufAvail=%d\n",
-                binCount, length, processed, audioBuffer.available());
+        if (binCount % 50 == 1) {
+            Serial.printf("[OPUS] pkt#%d in=%d processed=%d bufAvail=%d heap=%d\n",
+                binCount, length, processed, audioBuffer.available(), ESP.getFreeHeap());
         }
         if (processed != length) {
             Serial.printf("Warning: Only processed %d/%d bytes\n", processed, length);
@@ -538,7 +536,7 @@ void websocketSetup(const String& server_domain, int port, const String& path)
 // Toggle chat state: IDLE/PROCESSING → LISTENING, LISTENING → IDLE, SPEAKING → interrupt
 // Sends START_SESSION / STOP_SESSION instructions to Server for on-demand Ultravox call management
 void toggleChatState() {
-    Serial.printf("[CHAT] toggleChatState, current state: %d\n", deviceState);
+    Serial.printf("[CHAT] toggleChatState, state: %d\n", deviceState);
     switch (deviceState) {
         case IDLE:
         case PROCESSING:
