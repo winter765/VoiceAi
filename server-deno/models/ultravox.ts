@@ -87,6 +87,7 @@ export const connectToUltravox = async ({
     let isSessionActive = false;
     let createdSent = false;
     let createdAcked = false; // true after RESPONSE.CREATED text msg is actually sent
+    let waitingForNewTurn = false; // true after AI finishes speaking, waiting for user to speak
     let outputTranscript = "";
     let audioPacketCount = 0;
     let totalAudioBytes = 0;
@@ -166,6 +167,11 @@ export const connectToUltravox = async ({
                     console.log(`[UV] Ultravox audio: chunk #${uvAudioChunks}, size=${data.length}B, total=${uvAudioBytes}B`);
                 }
                 if (!createdSent) {
+                    // If waiting for new turn, don't start sending audio yet
+                    if (waitingForNewTurn) {
+                        console.log("[DEBUG] Ignoring audio chunk while waitingForNewTurn=true");
+                        return;
+                    }
                     createdSent = true;
                     // Buffer this chunk, send RESPONSE.CREATED, then flush buffered PCM
                     pcmQueue.push(Buffer.from(data));
@@ -203,6 +209,11 @@ export const connectToUltravox = async ({
                             createdSent = false;
                             createdAcked = false;
                             outputTranscript = "";
+                            waitingForNewTurn = true; // Wait for AI to start new response before sending RESPONSE.CREATED
+                            console.log("[DEBUG] Set waitingForNewTurn=true, ignoring audio until new turn starts");
+                        } else if (event.state === "thinking" || event.state === "speaking") {
+                            // AI is starting a new turn
+                            waitingForNewTurn = false;
                         }
                         break;
 
@@ -295,6 +306,9 @@ export const connectToUltravox = async ({
             uvWs.close();
             uvWs = null;
         }
+        // Notify ESP32 that session has ended so it can update state
+        ws.send(JSON.stringify({ type: "server", msg: "RESPONSE.COMPLETE" }));
+        console.log("[UV] Sent RESPONSE.COMPLETE to ESP32 after STOP_SESSION");
     }
 
     // Listen for ESP32 messages (text instructions + binary audio)
