@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.1] - 2026-03-26
+
+### 公网部署修复
+
+#### 固件端 (firmware-idf)
+- 后端 URL 默认配置改为公网地址 `http://35.162.7.133`
+- WebSocket URL 默认配置改为 `ws://35.162.7.133/ws`
+- WiFi 配网成功页面注册链接指向公网后端
+
+#### 前端 (frontend-nextjs)
+- 修复 MAC 地址大小写不一致导致设备绑定失败的问题
+- `db/devices.ts`: 所有 MAC 地址操作统一转大写
+- `api/generate_auth_token/route.ts`: 查询时 MAC 地址转大写
+- `addUserToDeviceByMac()` 支持设备不存在时自动创建
+
+### 已知问题
+- 服务器 `DEV_MODE` 环境变量需要使用大写 `True`（非 `true`）
+
+---
+
 ## [1.0.0] - 2026-03-26
 
 ### 新增功能

@@ -84,10 +84,12 @@ export const getDeviceByMac = async (
     supabase: SupabaseClient,
     macAddress: string,
 ) => {
+    // Normalize MAC address to uppercase for consistent matching
+    const normalizedMac = macAddress.toUpperCase();
     const { data, error } = await supabase
         .from("devices")
         .select("*")
-        .eq("mac_address", macAddress)
+        .eq("mac_address", normalizedMac)
         .maybeSingle();
 
     if (error) {
@@ -100,10 +102,12 @@ export const createDevice = async (
     supabase: SupabaseClient,
     macAddress: string,
 ) => {
+    // Normalize MAC address to uppercase
+    const normalizedMac = macAddress.toUpperCase();
     const userCode = generateUserCode();
     const { data, error } = await supabase
         .from("devices")
-        .insert({ mac_address: macAddress, user_code: userCode })
+        .insert({ mac_address: normalizedMac, user_code: userCode })
         .select("*")
         .single();
 
@@ -118,23 +122,50 @@ export const addUserToDeviceByMac = async (
     macAddress: string,
     userId: string,
 ) => {
-    const { data, error } = await supabase
+    // Normalize MAC address to uppercase for consistent matching
+    const normalizedMac = macAddress.toUpperCase();
+
+    // First try to find existing device with this MAC
+    const { data: existingDevice } = await supabase
         .from("devices")
-        .update({ user_id: userId })
-        .eq("mac_address", macAddress)
-        .is("user_id", null)
         .select("*")
+        .eq("mac_address", normalizedMac)
         .maybeSingle();
 
-    if (error) {
+    if (existingDevice) {
+        // Device exists - update user_id (allow rebinding)
+        const { data, error } = await supabase
+            .from("devices")
+            .update({ user_id: userId })
+            .eq("device_id", existingDevice.device_id)
+            .select("*")
+            .single();
+
+        if (error) {
+            return false;
+        }
+
+        await updateUser(supabase, { device_id: data.device_id }, userId);
+        return true;
+    }
+
+    // Device doesn't exist - create it and bind
+    try {
+        const newDevice = await createDevice(supabase, normalizedMac);
+        const { error } = await supabase
+            .from("devices")
+            .update({ user_id: userId })
+            .eq("device_id", newDevice.device_id);
+
+        if (error) {
+            return false;
+        }
+
+        await updateUser(supabase, { device_id: newDevice.device_id }, userId);
+        return true;
+    } catch {
         return false;
     }
-
-    if (data) {
-        await updateUser(supabase, { device_id: data.device_id }, userId);
-    }
-
-    return !!data;
 };
 
 export const unbindDevice = async (

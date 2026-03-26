@@ -39,9 +39,11 @@ const createSupabaseToken = (
 
 const getUserByMacAddress = async (macAddress: string) => {
     const supabase = createClient();
+    // Normalize MAC address to uppercase for consistent matching
+    const normalizedMac = macAddress.toUpperCase();
     const { data, error } = await supabase.from("devices").select(
         "*, user:user_id(*)",
-    ).eq("mac_address", macAddress).single();
+    ).eq("mac_address", normalizedMac).single();
     if (error) {
         throw new Error(error.message);
     }

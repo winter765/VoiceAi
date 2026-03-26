@@ -69,6 +69,9 @@ bool ElatoProtocol::OpenAudioChannel() {
     std::string url = settings.GetString("url");
     std::string token = settings.GetString("token");
 
+    ESP_LOGI(TAG, "Connecting to ElatoAI server: %s", url.c_str());
+    ESP_LOGI(TAG, "Token length: %d, empty: %s", (int)token.length(), token.empty() ? "yes" : "no");
+
     if (url.empty()) {
         ESP_LOGE(TAG, "WebSocket URL not configured");
         SetError(Lang::Strings::SERVER_NOT_CONNECTED);
