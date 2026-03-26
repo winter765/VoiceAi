@@ -182,10 +182,11 @@ void audioStreamTask(void *parameter) {
         if (millis() - lastMemLog > 5000) {
             lastMemLog = millis();
             uint32_t freeHeap = ESP.getFreeHeap();
-            Serial.printf("[MEM] Free heap: %d, Min free: %d, audioBuffer: %d/%d\n",
-                          freeHeap, ESP.getMinFreeHeap(),
+            uint32_t freePsram = ESP.getFreePsram();
+            Serial.printf("[MEM] Heap: %d/%d, PSRAM: %d/%d, audioBuffer: %d/%d\n",
+                          freeHeap, ESP.getHeapSize(),
+                          freePsram, ESP.getPsramSize(),
                           audioBuffer.available(), AUDIO_BUFFER_SIZE);
-
         }
 
         if (deviceState == SPEAKING && audioBuffer.available() > 0) {

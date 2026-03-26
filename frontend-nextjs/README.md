@@ -1,96 +1,219 @@
-<a href="https://demo-nextjs-with-supabase.vercel.app/">
-  <img alt="Next.js and Supabase Starter Kit - the fastest way to build apps with Next.js and Supabase" src="https://demo-nextjs-with-supabase.vercel.app/opengraph-image.png">
-  <h1 align="center">Next.js and Supabase Starter Kit</h1>
-</a>
+# frontend-nextjs 代码架构文档
 
-<p align="center">
- The fastest way to build apps with Next.js and Supabase
-</p>
+## 技术栈
 
-<p align="center">
-  <a href="#features"><strong>Features</strong></a> ·
-  <a href="#demo"><strong>Demo</strong></a> ·
-  <a href="#deploy-to-vercel"><strong>Deploy to Vercel</strong></a> ·
-  <a href="#clone-and-run-locally"><strong>Clone and run locally</strong></a> ·
-  <a href="#feedback-and-issues"><strong>Feedback and issues</strong></a>
-  <a href="#more-supabase-examples"><strong>More Examples</strong></a>
-</p>
-<br/>
+| 技术 | 用途 |
+|---|---|
+| Next.js 15 | App Router, standalone 输出模式 |
+| Tailwind CSS + Radix UI (shadcn/ui) | UI 组件库 |
+| Supabase (SSR) | 认证 + PostgreSQL 数据库 |
+| OpenAI Realtime API | Web 端 WebRTC 直连语音 |
+| Stripe | 支付集成 |
+| Framer Motion | 动画 |
+| React Hook Form + Zod | 表单验证 |
 
-## Features
+## 目录结构
 
-- Works across the entire [Next.js](https://nextjs.org) stack
-  - App Router
-  - Pages Router
-  - Middleware
-  - Client
-  - Server
-  - It just works!
-- supabase-ssr. A package to configure Supabase Auth to use cookies
-- Styling with [Tailwind CSS](https://tailwindcss.com)
-- Components with [shadcn/ui](https://ui.shadcn.com/)
-- Optional deployment with [Supabase Vercel Integration and Vercel deploy](#deploy-your-own)
-  - Environment variables automatically assigned to Vercel project
+```
+frontend-nextjs/
+├── app/
+│   ├── layout.tsx                # 根布局：加载用户、Navbar、Footer、GA
+│   ├── page.tsx                  # 落地页（Landing Page）
+│   ├── actions.ts                # Server Actions（登录/注册/登出/设备绑定/GitHub Stars）
+│   ├── sitemap.ts                # 站点地图
+│   ├── (auth-pages)/             # 认证页组
+│   │   ├── sign-in/page.tsx      # 登录页
+│   │   └── forgot-password/page.tsx  # 忘记密码
+│   ├── auth/callback/route.ts    # OAuth 回调处理
+│   ├── home/                     # 已登录主界面
+│   │   ├── page.tsx              # Playground 页（角色选择 + 实时对话）
+│   │   ├── settings/page.tsx     # 设置页
+│   │   ├── create/page.tsx       # 创建自定义角色
+│   │   └── layout.tsx            # 主界面布局
+│   ├── onboard/page.tsx          # 新用户引导流程
+│   ├── protected/                # 修改密码
+│   ├── animation/                # 动画演示页
+│   ├── logo/                     # Logo 展示页
+│   ├── api/                      # API Routes
+│   └── components/               # 页面级组件
+├── components/ui/                # shadcn/ui 基础组件库（30+ 组件）
+├── db/                           # Supabase 数据库访问层
+├── lib/                          # 常量、工具函数
+├── utils/                        # Supabase 客户端、i18n、工具
+├── middleware.ts                  # 全局中间件（Session 刷新）
+├── next.config.js                # Next.js 配置（standalone 输出）
+└── package.json
+```
 
-## Demo
+## API Routes
 
-You can view a fully working demo at [demo-nextjs-with-supabase.vercel.app](https://demo-nextjs-with-supabase.vercel.app/).
+| 路由 | 方法 | 功能 |
+|---|---|---|
+| `/api/session` | GET | 生成 OpenAI Realtime 临时 Key，构建系统提示词（含聊天历史、角色信息），用于 WebRTC 连接 |
+| `/api/generate_auth_token` | GET | ESP32 设备通过 MAC 地址获取 JWT Token（有效期 10 年）；DEV 模式支持 `SKIP_DEVICE_REGISTRATION` |
+| `/api/ota_update_handler` | POST | 设备 OTA 升级完成后清除 `devices.is_ota` 标志 |
+| `/api/factory_reset_handler` | POST | 设备出厂重置后清除 `devices.is_reset` 标志 |
+| `/api/checkout` | POST | 创建 Stripe Checkout Session（全球配送） |
+| `/auth/callback` | GET | Supabase OAuth 回调：code 换 session，首次登录自动建用户并跳转 `/onboard` |
 
-## Deploy to Vercel
+## 核心页面
 
-Vercel deployment will guide you through creating a Supabase account and project.
+### 落地页 (`app/page.tsx`)
+- 产品介绍、角色展示轮播、YouTube Demo、GitHub Stars 计数
+- 定价信息、产品特性说明
 
-After installation of the Supabase integration, all relevant environment variables will be assigned to the project so the deployment is fully functioning.
+### Playground (`app/home/page.tsx`)
+- 认证检查 → 加载用户角色列表
+- `PlaygroundComponent`: 角色选择卡片 + 切换 personality → 更新 Supabase
+- `Realtime/App.tsx`: WebRTC 实时语音对话
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel%2Fnext.js%2Ftree%2Fcanary%2Fexamples%2Fwith-supabase&project-name=nextjs-with-supabase&repository-name=nextjs-with-supabase&demo-title=nextjs-with-supabase&demo-description=This%20starter%20configures%20Supabase%20Auth%20to%20use%20cookies%2C%20making%20the%20user's%20session%20available%20throughout%20the%20entire%20Next.js%20app%20-%20Client%20Components%2C%20Server%20Components%2C%20Route%20Handlers%2C%20Server%20Actions%20and%20Middleware.&demo-url=https%3A%2F%2Fdemo-nextjs-with-supabase.vercel.app%2F&external-id=https%3A%2F%2Fgithub.com%2Fvercel%2Fnext.js%2Ftree%2Fcanary%2Fexamples%2Fwith-supabase&demo-image=https%3A%2F%2Fdemo-nextjs-with-supabase.vercel.app%2Fopengraph-image.png&integration-ids=oac_VqOgBHqhEoFTPzGkPd7L0iH6)
+### 设置页 (`app/home/settings/page.tsx`)
+- 个人信息编辑（姓名、年龄、兴趣）
+- 设备绑定（用户码输入）
+- 音量远程控制
+- 语言切换
+- 登出
 
-The above will also clone the Starter kit to your GitHub, you can clone that locally and develop locally.
+### 创建角色 (`app/home/create/page.tsx`)
+- `BuildDashboard`: 自定义 AI 角色创建面板
+- 配置 provider、voice、character_prompt、voice_prompt
 
-If you wish to just develop locally and not deploy to Vercel, [follow the steps below](#clone-and-run-locally).
+### 新用户引导 (`app/onboard/page.tsx`)
+- 首次登录引导流程
+- 收集用户基本信息
 
-## Clone and run locally
+## 核心组件
 
-1. You'll first need a Supabase project which can be made [via the Supabase dashboard](https://database.new)
+### Realtime 语音 (`app/components/Realtime/`)
 
-2. Create a Next.js app using the Supabase Starter template npx command
+**`App.tsx` — WebRTC 连接管理：**
+```
+获取临时 key (GET /api/session)
+  → createRealtimeConnection()
+  → 建立 RTCPeerConnection
+  → DataChannel 收发 OpenAI 实时事件
+  → 音频可视化
+```
 
-   ```bash
-   npx create-next-app -e with-supabase
-   ```
+**`lib/realtimeConnection.ts` — WebRTC SDP 协商：**
+- 直连 `https://api.openai.com/v1/realtime`
+- 创建 offer → 服务端 answer → 建立连接
 
-3. Use `cd` to change into the app's directory
+### Playground (`app/components/Playground/`)
+- `PlaygroundComponent.tsx` — 角色选择 + 实时对话组合
+- 角色卡片网格展示，点击切换 personality
 
-   ```bash
-   cd name-of-new-app
-   ```
+### 设置 (`app/components/Settings/`)
+- `AppSettings.tsx` — 设备注册、音量调节、登出
 
-4. Rename `.env.local.example` to `.env.local` and update the following:
+### 落地页 (`app/components/LandingPage/`)
+- 约 15 个子组件：轮播、定价、产品展示等
 
-   ```
-   NEXT_PUBLIC_SUPABASE_URL=[INSERT SUPABASE PROJECT URL]
-   NEXT_PUBLIC_SUPABASE_ANON_KEY=[INSERT SUPABASE PROJECT API ANON KEY]
-   ```
+### 导航 (`app/components/Nav/`)
+- Navbar、移动端菜单、侧边栏
 
-   Both `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` can be found in [your Supabase project's API settings](https://app.supabase.com/project/_/settings/api)
+## 数据库访问层 (`db/`)
 
-5. You can now run the Next.js local development server:
+| 文件 | 对应表 | 主要操作 |
+|---|---|---|
+| `db/users.ts` | `users` | createUser, getUserById（含 personality + device join）, updateUser, doesUserExist |
+| `db/devices.ts` | `devices` | 检查用户码、绑定设备、更新设备、音量控制 |
+| `db/personalities.ts` | `personalities` | 获取全部公共角色、获取我的角色、按 ID 查询、创建角色 |
+| `db/conversations.ts` | `conversations` | 对话历史查询 |
+| `db/languages.ts` | `languages` | 语言列表 |
+| `db/supabase.ts` | — | 自动生成的 TypeScript 类型定义（DB Schema） |
 
-   ```bash
-   npm run dev
-   ```
+## 认证流程
 
-   The starter kit should now be running on [localhost:3000](http://localhost:3000/).
+### Web 用户认证
+```
+用户访问任意页面
+  → middleware.ts 调用 updateSession() 刷新 Supabase Session（Cookie）
+  → 登录方式：邮箱/密码 (signInAction) 或 Google OAuth
+  → OAuth 回调 /auth/callback:
+    exchangeCodeForSession → 首次用户自动建记录 → /onboard
+  → 后续访问 /home: 服务端检查用户, 不存在则创建
+```
 
-6. This template comes with the default shadcn/ui style initialized. If you instead want other ui.shadcn styles, delete `components.json` and [re-install shadcn/ui](https://ui.shadcn.com/docs/installation/next)
+### 设备认证
+```
+ESP32 MAC 地址
+  → GET /api/generate_auth_token?macAddress=XX:XX:XX:XX:XX:XX
+  → 查 devices 表 → 关联 users
+  → 签名 JWT: {sub: user_id, email, exp: 10年}
+  → DEV: SKIP_DEVICE_REGISTRATION=True 时返回 admin 用户 token
+```
 
-> Check out [the docs for Local Development](https://supabase.com/docs/guides/getting-started/local-development) to also run Supabase locally.
+## Supabase 客户端
 
-## Feedback and issues
+| 使用场景 | 文件 | 方式 |
+|---|---|---|
+| Server Components / API Routes | `utils/supabase/server.ts` | `createServerClient`（基于 Cookie） |
+| Client Components | `utils/supabase/client.ts` | `createBrowserClient` |
+| Middleware | `utils/supabase/middleware.ts` | `updateSession`（刷新 Token） |
 
-Please file feedback and issues over on the [Supabase GitHub org](https://github.com/supabase/supabase/issues/new/choose).
+## Server Actions (`app/actions.ts`)
 
-## More Supabase examples
+| Action | 功能 |
+|---|---|
+| `signUpAction` | 邮箱注册 |
+| `signInAction` | 邮箱登录 |
+| `signOutAction` | 登出 |
+| `forgotPasswordAction` | 忘记密码 |
+| `resetPasswordAction` | 重置密码 |
+| `dbCheckUserCode` | 检查设备用户码 |
+| `dbAddUserToDevice` | 绑定设备 |
+| `fetchGitHubStars` | 获取 GitHub Stars 数 |
 
-- [Next.js Subscription Payments Starter](https://github.com/vercel/nextjs-subscription-payments)
-- [Cookie-based Auth and the Next.js 13 App Router (free course)](https://youtube.com/playlist?list=PL5S4mPUpp4OtMhpnp93EFSo42iQ40XjbF)
-- [Supabase Auth and the Next.js App Router](https://github.com/supabase/supabase/tree/master/examples/auth/nextjs)
+## 关键常量 (`lib/data.ts`)
+
+| 常量 | 值 | 说明 |
+|---|---|---|
+| 默认 personality ID | `a1c073e6-653d-40cf-acc1-891331689409` | 默认角色 |
+| 初始积分 | 50 | 每积分 = 36 秒 |
+| 设备售价 | $55 | Stripe 结账 |
+| 订阅价格 | $10/月 | 付费会员 |
+| 语音列表 | OpenAI (8), Grok (5), Gemini (30) | 各 provider 可选语音 |
+
+## 环境变量 (.env.local)
+
+| 变量 | 必须 | 说明 |
+|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | 是 | Supabase 项目 URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | 是 | Supabase anon key |
+| `JWT_SECRET_KEY` | 是 | JWT 签名密钥 |
+| `OPENAI_API_KEY` | 否 | Web 端 WebRTC 直连用 |
+| `ENCRYPTION_KEY` | 否 | AES-256-CBC 主密钥 |
+| `STRIPE_SECRET_KEY` | 否 | Stripe 支付密钥 |
+| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | 否 | Stripe 公开密钥 |
+| `GOOGLE_OAUTH` | 否 | 启用 Google OAuth |
+| `NEXT_PUBLIC_SKIP_DEVICE_REGISTRATION` | 否 | 跳过设备注册（开发用） |
+
+## 开发指南
+
+**环境要求：**
+- Node.js 18+
+
+**开发模式：**
+```bash
+cd frontend-nextjs
+cp .env.example .env.local  # 首次配置环境变量
+npm install
+npm run dev                  # http://0.0.0.0:3000
+```
+
+**生产构建与启动：**
+```bash
+npm run build
+HOSTNAME=0.0.0.0 PORT=3000 node .next/standalone/server.js
+```
+
+**输出模式：**
+- `next.config.js` 配置 `output: "standalone"`
+- 生产部署使用 `.next/standalone/server.js`
+
+## UI 组件库
+
+基于 shadcn/ui，包含 30+ 基础组件：
+
+`accordion`, `alert-dialog`, `avatar`, `badge`, `button`, `card`, `carousel`, `checkbox`, `collapsible`, `dialog`, `drawer`, `dropdown-menu`, `form`, `input`, `label`, `navigation-menu`, `popover`, `progress`, `radio-group`, `scroll-area`, `select`, `separator`, `sheet`, `sidebar`, `skeleton`, `slider`, `switch`, `tabs`, `textarea`, `tooltip`
