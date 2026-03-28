@@ -87,7 +87,11 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) 
     commands_.clear();
 
     if (models_list == nullptr) {
+#ifdef CONFIG_CUSTOM_WAKE_WORD_LANGUAGE
+        language_ = CONFIG_CUSTOM_WAKE_WORD_LANGUAGE;
+#else
         language_ = "cn";
+#endif
         models_ = esp_srmodel_init("model");
 #ifdef CONFIG_CUSTOM_WAKE_WORD
         threshold_ = CONFIG_CUSTOM_WAKE_WORD_THRESHOLD / 100.0f;

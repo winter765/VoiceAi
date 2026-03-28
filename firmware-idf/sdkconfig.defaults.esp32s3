@@ -21,10 +21,12 @@ CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
 CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
 
-# Wake Word Configuration - WakeNet9 "你好小智"
-CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS=y
-# Use AFE (Audio Front End) with WakeNet for better wake word detection
+# Wake Word Configuration - Alexa
+# Use AFE Wake Word with WakeNet9 Alexa model
 CONFIG_USE_AFE_WAKE_WORD=y
+CONFIG_SR_WN_WN9_ALEXA=y
+# Send wake word audio data to server for context
+CONFIG_SEND_WAKE_WORD_DATA=y
 # Send wake word audio data to server for context
 CONFIG_SEND_WAKE_WORD_DATA=y
 

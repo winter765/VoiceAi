@@ -725,6 +725,14 @@ config CUSTOM_WAKE_WORD_THRESHOLD
     help
         Custom Wake Word Threshold, range 1-99, the smaller the more sensitive, default 20
 
+config CUSTOM_WAKE_WORD_LANGUAGE
+    string "Custom Wake Word Language"
+    default "cn"
+    depends on USE_CUSTOM_WAKE_WORD
+    help
+        Custom Wake Word Language code, use "cn" for Chinese (with CONFIG_SR_MN_CN_*),
+        use "en" for English (with CONFIG_SR_MN_EN_*)
+
 config SEND_WAKE_WORD_DATA
     bool "Send Wake Word Data"
     default y
