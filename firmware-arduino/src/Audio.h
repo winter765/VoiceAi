@@ -12,6 +12,7 @@ extern WebSocketsClient webSocket;
 extern TaskHandle_t speakerTaskHandle;
 extern TaskHandle_t micTaskHandle;
 extern TaskHandle_t networkTaskHandle;
+extern TaskHandle_t wsSendTaskHandle;
 
 extern volatile bool scheduleListeningRestart;
 extern unsigned long scheduledTime;
@@ -65,6 +66,11 @@ extern I2SStream i2sInput;
 extern StreamCopy micToWsCopier;
 extern volatile bool i2sInputFlushScheduled;
 
+// MIC SEND BUFFER (decouple I2S read from WebSocket send)
+constexpr size_t MIC_SEND_BUFFER_SIZE = 1024 * 32;  // 32KB = ~1 second of audio
+constexpr size_t MIC_SEND_CHUNK_SIZE = 320;         // match packet size
+extern BufferRTOS<uint8_t> micSendBuffer;
+
 // WEBSOCKET
 void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length);
 void websocketSetup(const String& server_domain, int port, const String& path);
@@ -76,6 +82,7 @@ void audioStreamTask(void *parameter);
 
 // AUDIO INPUT
 void micTask(void *parameter);
+void wsSendTask(void *parameter);
 
 // STATE CONTROL
 void transitionToListening();

@@ -14,12 +14,17 @@ WebSocketsClient webSocket;
 TaskHandle_t speakerTaskHandle = NULL;
 TaskHandle_t micTaskHandle = NULL;
 TaskHandle_t networkTaskHandle = NULL;
+TaskHandle_t wsSendTaskHandle = NULL;
 
 // TIMING REGISTERS
 volatile bool chatToggleRequested = false;
 volatile bool scheduleListeningRestart = false;
 unsigned long scheduledTime = 0;
 unsigned long speakingStartTime = 0;
+
+// Forward declarations for flush flags
+volatile bool i2sInputFlushScheduled = false;
+volatile bool micSendBufferFlushScheduled = false;
 
 // AUDIO SETTINGS
 int currentVolume = 100;
@@ -95,6 +100,7 @@ unsigned long getSpeakingDuration() {
 
 // networkTask -> webSocket.loop() -> webSocketEvent(WStype_TEXT, ...) -> transitionToSpeaking()
 void transitionToSpeaking() {
+    Serial.printf("[SPK-TRANS] Start, state=%d\n", deviceState);
     vTaskDelay(50);
     i2sInputFlushScheduled = true;
     deviceState = SPEAKING;
@@ -115,7 +121,8 @@ void transitionToListening() {
 
 // audioStreamTask: manual 16→32 bit pipeline matching xiaozhi bread-compact-wifi
 void audioStreamTask(void *parameter) {
-    Serial.println("[SPK] Starting I2S output (ESP-IDF legacy driver, 32-bit)...");
+    Serial.println("===== [SPK] Task STARTED =====");
+    Serial.flush();  // Force output immediately
 
     // Opus decoder outputs 16-bit PCM into audioBuffer
     OpusSettings cfg;
@@ -225,34 +232,24 @@ void audioStreamTask(void *parameter) {
 
 class WebsocketStream : public Print {
 public:
-    // micTask -> micToWsCopier.copyBytes() -> wsStream.write()
+    // 已禁用 - 不应该被调用
     virtual size_t write(uint8_t b) override {
-        if (!webSocket.isConnected() || deviceState != LISTENING) {
-            return 1;
-        }
-        
-        xSemaphoreTake(wsMutex, portMAX_DELAY);
-        webSocket.sendBIN(&b, 1);
-        xSemaphoreGive(wsMutex);
+        Serial.println("[WARN] WebsocketStream::write(byte) called!");
         return 1;
     }
-    
-    // micTask -> micToWsCopier.copyBytes() -> wsStream.write()
+
     virtual size_t write(const uint8_t *buffer, size_t size) override {
-        if (size == 0 || !webSocket.isConnected() || deviceState != LISTENING) {
-            return size;
-        }
-        
-        xSemaphoreTake(wsMutex, portMAX_DELAY);
-        webSocket.sendBIN(buffer, size);
-        xSemaphoreGive(wsMutex);
+        Serial.printf("[WARN] WebsocketStream::write(buf,%d) called!\n", size);
         return size;
     }
 };
 
 WebsocketStream wsStream; //guard with wsMutex
 I2SStream i2sInput; //access from micTask only
-volatile bool i2sInputFlushScheduled = false;
+
+// MIC SEND BUFFER: decouple I2S read from WebSocket send
+// Producer: micTask, Consumer: wsSendTask
+BufferRTOS<uint8_t> micSendBuffer(MIC_SEND_BUFFER_SIZE, MIC_SEND_CHUNK_SIZE);
 
 // Read 32-bit I2S samples, convert to 16-bit (matching xiaozhi approach)
 const int MIC_READ_SAMPLES = 160; // 160 samples = 10ms at 16kHz
@@ -267,6 +264,8 @@ static uint8_t micOpusPacket[MIC_OPUS_MAX_PACKET_SIZE];  // Encoded packet buffe
 static int micOpusPacketCount = 0;  // For logging
 
 void micTask(void *parameter) {
+    Serial.println("===== [MIC] Task STARTED =====");
+    Serial.flush();  // Force output immediately
     Serial.println("[MIC] Initializing I2S input...");
 
     // Initialize Opus encoder for 16kHz mono voice
@@ -297,7 +296,13 @@ void micTask(void *parameter) {
     i2sConfig.pin_ws  = I2S_WS;
     i2sConfig.pin_data = I2S_SD;
     i2sConfig.port_no = I2S_PORT_IN;
+    // 增大 DMA 缓冲区，防止公网延迟导致溢出
+    i2sConfig.buffer_count = 16;
+    i2sConfig.buffer_size = 512;
     i2sInput.begin(i2sConfig);
+
+    Serial.println("[MIC] I2S input initialized, starting read loop");
+    int writeCount = 0;
 
     while (1) {
         if (i2sInputFlushScheduled) {
@@ -306,15 +311,22 @@ void micTask(void *parameter) {
             micOpusFramePos = 0;  // Reset Opus frame buffer on flush
         }
 
-        if (deviceState == LISTENING && webSocket.isConnected()) {
+        if (micSendBufferFlushScheduled) {
+            micSendBufferFlushScheduled = false;
+            micSendBuffer.reset();
+        }
+
+        if (deviceState == LISTENING) {
             // Read 32-bit samples from I2S
             size_t bytesRead = i2sInput.readBytes((uint8_t*)mic_buf_32, MIC_READ_SAMPLES * sizeof(int32_t));
             int samplesRead = bytesRead / sizeof(int32_t);
 
             if (samplesRead > 0) {
-                // Convert 32-bit to 16-bit (right shift 12 bits, matching xiaozhi)
+                // Convert 32-bit to 16-bit
+                // 24-bit mic data in 32-bit frame, shift right 10 to get good signal level
+                // (>> 12 was too quiet, >> 8 was too loud causing clipping)
                 for (int i = 0; i < samplesRead; i++) {
-                    int32_t val = mic_buf_32[i] >> 12;
+                    int32_t val = mic_buf_32[i] >> 10;
                     if (val > 32767) val = 32767;
                     if (val < -32768) val = -32768;
                     mic_buf_16[i] = (int16_t)val;
@@ -377,10 +389,55 @@ void micTask(void *parameter) {
 
             vTaskDelay(1);
         } else {
+            writeCount = 0;  // Reset counter when not listening
             vTaskDelay(10);
         }
     }
 }
+
+// wsSendTask: 独立发送任务，解耦 I2S 读取和网络发送
+void wsSendTask(void *parameter) {
+    Serial.println("===== [WS-SEND] Task STARTED (decoupled) =====");
+    static uint8_t sendBuf[320];
+    int sendCount = 0;
+
+    while (1) {
+        // 只在 LISTENING 状态且 WebSocket 连接时发送
+        if (deviceState == LISTENING && webSocket.isConnected()) {
+            size_t avail = micSendBuffer.available();
+            if (avail >= 320) {
+                // 读取数据（不需要 mutex，BufferRTOS 是线程安全的）
+                size_t bytesRead = micSendBuffer.readArray(sendBuf, 320);
+
+                if (bytesRead > 0) {
+                    // 获取 mutex 只为发送操作
+                    if (xSemaphoreTake(wsMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                        bool result = webSocket.sendBIN(sendBuf, bytesRead);
+                        xSemaphoreGive(wsMutex);
+
+                        sendCount++;
+                        if (sendCount <= 5) {
+                            Serial.printf("[WS-SEND] #%d: %s, first4=[%02x,%02x,%02x,%02x]\n",
+                                sendCount, result ? "ok" : "FAIL",
+                                sendBuf[0], sendBuf[1], sendBuf[2], sendBuf[3]);
+                        }
+                    } else {
+                        // mutex 超时，数据放回缓冲区重试
+                        // 注意：BufferRTOS 没有 unread，所以这里只是跳过，下次重读
+                        Serial.println("[WS-SEND] mutex timeout, will retry");
+                    }
+                }
+                vTaskDelay(1);  // 有数据时快速循环
+            } else {
+                vTaskDelay(5);  // 没有足够数据时稍等
+            }
+        } else {
+            sendCount = 0;  // 重置计数器
+            vTaskDelay(20); // 不在发送状态时慢循环
+        }
+    }
+}
+
 
 // WEBSOCKET EVENTS
 // networkTask -> webSocket.loop() -> webSocketEvent()
@@ -393,12 +450,12 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         deviceState = IDLE;
         break;
     case WStype_CONNECTED:
-        Serial.printf("[WSc] Connected to url: %s\n", payload);
+        Serial.printf("[WSc] CONNECTED to: %s, state→IDLE\n", payload);
         deviceState = IDLE;  // Stay IDLE until user presses button to START_SESSION
         break;
     case WStype_TEXT:
     {
-        Serial.printf("[WSc] get text: %s\n", payload);
+        Serial.printf("[TEXT-RX] len=%d: %s\n", length, payload);
 
         JsonDocument doc;
         DeserializationError error = deserializeJson(doc, (char *)payload);
@@ -456,8 +513,9 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
             } else if (strcmp((char*)msg.c_str(), "AUDIO.COMMITTED") == 0) {
                 deviceState = PROCESSING; 
             } else if (strcmp((char*)msg.c_str(), "RESPONSE.CREATED") == 0) {
-                Serial.println("Received RESPONSE.CREATED, transitioning to speaking");
+                Serial.printf("[TEXT] RESPONSE.CREATED received! state=%d → transitioning to SPEAKING\n", deviceState);
                 transitionToSpeaking();
+                Serial.printf("[TEXT] After transition, state=%d (SPEAKING=%d)\n", deviceState, SPEAKING);
             } else if (strcmp((char*)msg.c_str(), "SESSION.END") == 0) {
                 Serial.println("Received SESSION.END, going to sleep");
                 sleepRequested = true;
@@ -478,13 +536,23 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         break;
     case WStype_BIN:
     {
+        static int binCount = 0;
+        binCount++;
+
+        // Debug: Log state and conditions
+        if (binCount <= 5 || binCount % 50 == 0) {
+            Serial.printf("[BIN] pkt#%d len=%d state=%d schedRestart=%d\n",
+                binCount, length, deviceState, scheduleListeningRestart);
+        }
+
         if (scheduleListeningRestart || deviceState != SPEAKING) {
+            if (binCount <= 5) {
+                Serial.printf("[BIN] DROPPED! state=%d (need SPEAKING=%d)\n", deviceState, SPEAKING);
+            }
             break;
         }
 
         // Otherwise process the audio data normally
-        static int binCount = 0;
-        binCount++;
         size_t processed = opusDecoder.write(payload, length);
         if (binCount % 50 == 1) {
             Serial.printf("[OPUS] pkt#%d in=%d processed=%d bufAvail=%d heap=%d\n",
@@ -511,10 +579,14 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
 // wifiTask -> WIFIMANAGER::loop() -> WIFIMANAGER::tryConnect() -> connectCb() -> websocketSetup()
 void websocketSetup(const String& server_domain, int port, const String& path)
 {
+    Serial.printf("[WS-SETUP] server=%s port=%d path=%s\n", server_domain.c_str(), port, path.c_str());
+
     const String headers =
         "Authorization: Bearer " + String(authTokenGlobal) + "\r\n" +
         "X-Wifi-Rssi: " + String(WiFi.RSSI()) + "\r\n" +
         "X-Device-Mac: " + WiFi.macAddress();
+
+    Serial.printf("[WS-SETUP] token=%s\n", authTokenGlobal.substring(0, 20).c_str());
 
     xSemaphoreTake(wsMutex, portMAX_DELAY);
 
@@ -575,7 +647,8 @@ void toggleChatState() {
     }
 }
 
-// networkTask -> webSocket.loop()
+// networkTask: 只负责 webSocket.loop() 和状态管理
+// 音频发送已解耦到 wsSendTask
 void networkTask(void *parameter) {
     // Create audio send queue
     audioSendQueue = xQueueCreate(AUDIO_SEND_QUEUE_SIZE, sizeof(AudioPacket));

@@ -277,10 +277,12 @@ void setupDeviceMetadata() {
 void setup() {
   Serial.begin(921600);
   delay(500);
+  Serial.println("\n\n========== ElatoAI Starting ==========");
 
   // SETUP
   setupDeviceMetadata();
   wsMutex = xSemaphoreCreateMutex();
+  Serial.println("[SETUP] Mutex created");
 
 // INTERRUPT
 #ifdef TOUCH_MODE
@@ -319,14 +321,27 @@ void setup() {
                           1                // Core 1 (application core)
   );
 
+  Serial.println("[SETUP] Creating micTask...");
   xTaskCreatePinnedToCore(micTask,           // Function
                           "Microphone Task", // Name
                           16384,             // Stack size (16KB for Opus encoder)
                           NULL,              // Parameters
                           4,                 // Priority
-                          NULL,              // Handle
+                          &micTaskHandle,    // Handle
                           1                  // Core 1 (application core)
   );
+
+  Serial.println("[SETUP] Creating wsSendTask...");
+  // WebSocket send task - decoupled from micTask to handle network delays
+  xTaskCreatePinnedToCore(wsSendTask,        // Function
+                          "WS Send Task",    // Name
+                          4096,              // Stack size
+                          NULL,              // Parameters
+                          3,                 // Priority (lower than mic)
+                          &wsSendTaskHandle, // Handle
+                          0                  // Core 0 (protocol core, same as network)
+  );
+  Serial.println("[SETUP] Tasks created");
 
 #ifdef DISPLAY_ENABLED
   displayInit();

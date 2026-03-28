@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { Buffer } from "node:buffer";
 import type { RawData } from "npm:@types/ws";
 import { WebSocket } from "npm:ws";
@@ -341,9 +342,8 @@ export const connectToUltravox = async ({
         }
 
         // Text messages — parse instructions
-        if (isDev) {
-            console.log(`[DEBUG] ESP32 text message:`, (data as Buffer).toString("utf-8"));
-        }
+        // Always log for debugging (UNCONDITIONAL)
+        console.log(`[TEXT-IN] ESP32 text message received, len=${(data as Buffer).length}:`, (data as Buffer).toString("utf-8"));
 
         let message: any;
         try {

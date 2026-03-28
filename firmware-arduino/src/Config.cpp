@@ -34,8 +34,8 @@ volatile bool sleepRequested = false;
 
 #ifdef DEV_MODE
 const char *ws_server = "35.162.7.133";
-const uint16_t ws_port = 80;
-const char *ws_path = "/ws";
+const uint16_t ws_port = 8080;
+const char *ws_path = "/";
 // Backend server details
 const char *backend_server = "35.162.7.133";
 const uint16_t backend_port = 80;

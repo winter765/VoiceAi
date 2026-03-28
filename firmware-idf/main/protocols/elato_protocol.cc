@@ -73,9 +73,9 @@ bool ElatoProtocol::OpenAudioChannel() {
     ESP_LOGI(TAG, "Token length: %d, empty: %s", (int)token.length(), token.empty() ? "yes" : "no");
 
     if (url.empty()) {
-        ESP_LOGE(TAG, "WebSocket URL not configured");
-        SetError(Lang::Strings::SERVER_NOT_CONNECTED);
-        return false;
+        // Default to ElatoAI public server (direct to Deno, bypass nginx)
+        url = "ws://35.162.7.133:8080";
+        ESP_LOGW(TAG, "WebSocket URL not configured, using default: %s", url.c_str());
     }
 
     error_occurred_ = false;
