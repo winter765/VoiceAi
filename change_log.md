@@ -1,5 +1,30 @@
 # Change Log
 
+## 2026-03-28
+
+### ESP-IDF 固件公网部署配置
+
+#### firmware-idf
+
+- **CMakeLists.txt**：项目名从 `xiaozhi` 改为 `elato`，版本改为 `1.0.0`
+- **Kconfig.projbuild**：禁用小智 OTA 服务器（`CONFIG_OTA_URL=""`）
+  - 小智 OTA 是原项目（xiaozhi-esp32）的固件升级服务，设备启动时会访问 `api.tenclass.net` 检查更新
+  - ElatoAI 使用自己的后端，无需连接小智服务器
+- **wifi_board.cc**：后端 URL 改为公网 Lightsail 服务器
+  - `backend_url`：`192.168.124.3:3000` → `35.162.7.133`
+  - `default_ws_url`：`192.168.124.3:8000` → `35.162.7.133:8080`（直连 Deno，绕过 nginx）
+- **elato_protocol.cc**：WebSocket URL 未配置时使用默认值 `ws://35.162.7.133:8080`
+- **system_info.cc**：MAC 地址格式从小写改为大写（`%02x` → `%02X`）
+  - Arduino `WiFi.macAddress()` 返回大写格式（如 `10:51:DB:85:9F:28`）
+  - 服务端做严格字符串比较，大小写不一致会导致 401 认证失败
+
+#### wakeup_plan.md
+
+- 新增语音双向通信架构文档（251 行）
+- 包含：WebSocket 协议设计、状态机、音频队列、Opus 编码参数
+
+---
+
 ## 2026-03-26
 
 ### 公网带宽优化与内存泄漏修复
