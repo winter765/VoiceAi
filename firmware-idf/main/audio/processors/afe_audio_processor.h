@@ -14,6 +14,10 @@
 #include "audio_processor.h"
 #include "audio_codec.h"
 
+#ifdef CONFIG_USE_SOFTWARE_AEC
+#include <esp_ae_rate_cvt.h>
+#endif
+
 class AfeAudioProcessor : public AudioProcessor {
 public:
     AfeAudioProcessor();
@@ -29,6 +33,10 @@ public:
     size_t GetFeedSize() override;
     void EnableDeviceAec(bool enable) override;
 
+#ifdef CONFIG_USE_SOFTWARE_AEC
+    void FeedReference(const std::vector<int16_t>& data, int sample_rate);
+#endif
+
 private:
     EventGroupHandle_t event_group_ = nullptr;
     const esp_afe_sr_iface_t* afe_iface_ = nullptr;
@@ -41,6 +49,13 @@ private:
     std::vector<int16_t> input_buffer_;
     std::mutex input_buffer_mutex_;
     std::vector<int16_t> output_buffer_;
+
+#ifdef CONFIG_USE_SOFTWARE_AEC
+    std::vector<int16_t> reference_buffer_;
+    std::mutex reference_buffer_mutex_;
+    esp_ae_rate_cvt_handle_t reference_resampler_ = nullptr;
+    int reference_sample_rate_ = 0;
+#endif
 
     void AudioProcessorTask();
 };

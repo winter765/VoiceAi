@@ -24,9 +24,9 @@
 Application::Application() {
     event_group_ = xEventGroupCreate();
 
-#if CONFIG_USE_DEVICE_AEC && CONFIG_USE_SERVER_AEC
-#error "CONFIG_USE_DEVICE_AEC and CONFIG_USE_SERVER_AEC cannot be enabled at the same time"
-#elif CONFIG_USE_DEVICE_AEC
+#if (CONFIG_USE_DEVICE_AEC && CONFIG_USE_SERVER_AEC) || (CONFIG_USE_DEVICE_AEC && CONFIG_USE_SOFTWARE_AEC) || (CONFIG_USE_SERVER_AEC && CONFIG_USE_SOFTWARE_AEC)
+#error "Only one of CONFIG_USE_DEVICE_AEC, CONFIG_USE_SERVER_AEC, or CONFIG_USE_SOFTWARE_AEC can be enabled"
+#elif CONFIG_USE_DEVICE_AEC || CONFIG_USE_SOFTWARE_AEC
     aec_mode_ = kAecOnDeviceSide;
 #elif CONFIG_USE_SERVER_AEC
     aec_mode_ = kAecOnServerSide;
@@ -574,6 +574,13 @@ void Application::InitializeProtocol() {
                         display->SetChatMessage("assistant", message.c_str());
                     });
                 }
+            } else if (strcmp(state->valuestring, "interrupt") == 0) {
+                // User interrupted AI speech (barge-in)
+                ESP_LOGI(TAG, "User interrupted AI speech");
+                Schedule([this]() {
+                    // Clear playback buffer to stop current audio immediately
+                    audio_service_.ResetDecoder();
+                });
             }
         } else if (strcmp(type->valuestring, "stt") == 0) {
             auto text = cJSON_GetObjectItem(root, "text");

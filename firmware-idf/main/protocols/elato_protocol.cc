@@ -284,7 +284,13 @@ void ElatoProtocol::ParseServerMessage(const cJSON* root) {
             cJSON_Delete(tts_msg);
         }
     } else if (strcmp(msg_str, "AUDIO.COMMITTED") == 0) {
-        // User audio received - no action needed for Application
+        // User speech detected by AI -> interrupt current playback
+        // This enables barge-in: user can interrupt AI while it's speaking
+        cJSON* interrupt_msg = cJSON_CreateObject();
+        cJSON_AddStringToObject(interrupt_msg, "type", "tts");
+        cJSON_AddStringToObject(interrupt_msg, "state", "interrupt");
+        on_incoming_json_(interrupt_msg);
+        cJSON_Delete(interrupt_msg);
     } else if (strcmp(msg_str, "SESSION.END") == 0) {
         // Session ended -> tts stop
         cJSON* tts_msg = cJSON_CreateObject();

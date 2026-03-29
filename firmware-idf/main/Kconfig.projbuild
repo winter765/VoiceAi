@@ -759,7 +759,7 @@ config USE_AUDIO_PROCESSOR
         Requires ESP32 S3 and PSRAM
 
 config USE_DEVICE_AEC
-    bool "Enable Device-Side AEC"
+    bool "Enable Device-Side AEC (Hardware Reference)"
     default n
         depends on USE_AUDIO_PROCESSOR && (BOARD_TYPE_ESP_BOX_3 || BOARD_TYPE_ESP_BOX || BOARD_TYPE_ESP_BOX_LITE \
         || BOARD_TYPE_LICHUANG_DEV_S3 || BOARD_TYPE_ESP_KORVO2_V3 || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_1_75|| BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_1_75C || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_LCD_1_83\
@@ -770,6 +770,15 @@ config USE_DEVICE_AEC
         || BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_LCD_4_3C)
     help
         To work properly, device-side AEC requires a clean output reference path from the speaker signal and physical acoustic isolation between the microphone and speaker.
+
+config USE_SOFTWARE_AEC
+    bool "Enable Software AEC (No Hardware Reference)"
+    default n
+    depends on USE_AUDIO_PROCESSOR && !USE_DEVICE_AEC
+    help
+        Enable software-based AEC for boards without hardware reference channel.
+        This uses the playback audio as reference signal in software.
+        Supports full-duplex conversation with AI-controlled barge-in.
 
 config USE_SERVER_AEC
     bool "Enable Server-Side AEC (Unstable)"

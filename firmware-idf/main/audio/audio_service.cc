@@ -306,6 +306,13 @@ void AudioService::AudioOutputTask() {
             codec_->EnableOutput(true);
         }
 
+#ifdef CONFIG_USE_SOFTWARE_AEC
+        /* Feed playback audio to AEC as reference signal */
+        if (audio_processor_ && audio_processor_->IsRunning()) {
+            audio_processor_->FeedReference(task->pcm, codec_->output_sample_rate());
+        }
+#endif
+
         codec_->OutputData(task->pcm);
 
         /* Update the last output time */

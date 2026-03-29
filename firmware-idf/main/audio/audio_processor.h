@@ -11,7 +11,7 @@
 class AudioProcessor {
 public:
     virtual ~AudioProcessor() = default;
-    
+
     virtual void Initialize(AudioCodec* codec, int frame_duration_ms, srmodel_list_t* models_list) = 0;
     virtual void Feed(std::vector<int16_t>&& data) = 0;
     virtual void Start() = 0;
@@ -21,6 +21,10 @@ public:
     virtual void OnVadStateChange(std::function<void(bool speaking)> callback) = 0;
     virtual size_t GetFeedSize() = 0;
     virtual void EnableDeviceAec(bool enable) = 0;
+
+#ifdef CONFIG_USE_SOFTWARE_AEC
+    virtual void FeedReference(const std::vector<int16_t>& data, int sample_rate) {}
+#endif
 };
 
 #endif
