@@ -73,8 +73,8 @@ bool ElatoProtocol::OpenAudioChannel() {
     ESP_LOGI(TAG, "Token length: %d, empty: %s", (int)token.length(), token.empty() ? "yes" : "no");
 
     if (url.empty()) {
-        // Default to ElatoAI public server (direct to Deno, bypass nginx)
-        url = "ws://35.162.7.133:8080";
+        // Default to local development server
+        url = "ws://192.168.124.3:8000";
         ESP_LOGW(TAG, "WebSocket URL not configured, using default: %s", url.c_str());
     }
 

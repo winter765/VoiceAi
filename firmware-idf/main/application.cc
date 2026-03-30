@@ -347,14 +347,45 @@ void Application::ActivationTask() {
     // Create OTA object for activation process
     ota_ = std::make_unique<Ota>();
 
-    // ElatoAI: Skip xiaozhi OTA server checks, use our own token mechanism
-    // The token is fetched via FetchElatoToken() in wifi_board.cc after WiFi connects
-    ESP_LOGI(TAG, "ElatoAI: Skipping OTA server checks, initializing protocol directly");
+    // Mark current firmware as valid (required before new OTA can begin)
+    ota_->MarkCurrentVersionValid();
+
+    // Check for OTA updates
+    std::string ota_url = ota_->GetCheckVersionUrl();
+    if (!ota_url.empty()) {
+        ESP_LOGI(TAG, "Checking OTA version from: %s", ota_url.c_str());
+        auto ret = ota_->CheckVersion();
+        if (ret == ESP_OK) {
+            if (ota_->HasNewVersion()) {
+                ESP_LOGI(TAG, "New firmware version available: %s", ota_->GetFirmwareVersion().c_str());
+                // Start OTA upgrade
+                Alert(Lang::Strings::UPGRADING, ota_->GetFirmwareVersion().c_str(), "cloud_arrow_down", Lang::Sounds::OGG_UPGRADE);
+                vTaskDelay(pdMS_TO_TICKS(2000));
+
+                bool success = ota_->StartUpgrade([](int progress, size_t speed) {
+                    ESP_LOGI(TAG, "OTA progress: %d%%, speed: %zu KB/s", progress, speed / 1024);
+                });
+
+                if (success) {
+                    ESP_LOGI(TAG, "OTA upgrade successful, rebooting...");
+                    esp_restart();
+                } else {
+                    ESP_LOGE(TAG, "OTA upgrade failed");
+                }
+            } else {
+                ESP_LOGI(TAG, "Firmware is up to date: %s", ota_->GetCurrentVersion().c_str());
+            }
+        } else {
+            ESP_LOGW(TAG, "Failed to check OTA version: %d", ret);
+        }
+    } else {
+        ESP_LOGI(TAG, "OTA URL not configured, skipping version check");
+    }
 
     // Apply assets (load fonts, srmodels for wake word detection, etc.)
     auto& assets = Assets::GetInstance();
     assets.Apply();
-    ESP_LOGI(TAG, "ElatoAI: Assets applied");
+    ESP_LOGI(TAG, "Assets applied");
 
     // Initialize the protocol
     InitializeProtocol();
@@ -553,6 +584,12 @@ void Application::InitializeProtocol() {
             auto state = cJSON_GetObjectItem(root, "state");
             if (strcmp(state->valuestring, "start") == 0) {
                 Schedule([this]() {
+                    // Ignore stale tts start if we just aborted (race with wake word interrupt)
+                    // The server might send RESPONSE.CREATED before receiving our STOP_SESSION
+                    if (aborted_ && GetDeviceState() == kDeviceStateListening) {
+                        ESP_LOGI(TAG, "Ignoring stale tts start after abort");
+                        return;
+                    }
                     aborted_ = false;
                     SetDeviceState(kDeviceStateSpeaking);
                 });
@@ -586,6 +623,8 @@ void Application::InitializeProtocol() {
             auto text = cJSON_GetObjectItem(root, "text");
             if (cJSON_IsString(text)) {
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
+                // Reset aborted flag - user has spoken, subsequent AI responses are legitimate
+                aborted_ = false;
                 // Reset listening timeout timer when user speech is detected
                 ResetListeningTimeoutTimer();
                 Schedule([display, message = std::string(text->valuestring)]() {
@@ -908,6 +947,8 @@ void Application::HandleStateChangedEvent() {
             audio_service_.EnableWakeWordDetection(true);
             // Stop listening timeout timer when returning to idle
             StopListeningTimeoutTimer();
+            // Reset abort flag for clean state
+            aborted_ = false;
             break;
         case kDeviceStateConnecting:
             display->SetStatus(Lang::Strings::CONNECTING);

@@ -1,3 +1,8 @@
 .vscode/
 .DS_Store
 local.md
+
+# Server pid and log files
+*.pid
+server-deno/deno.log
+frontend-nextjs/next.log

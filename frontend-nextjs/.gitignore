@@ -5,3 +5,6 @@ node_modules
 start.sh
 stop.sh
 next.pid
+
+# Firmware files (keep directory with .gitkeep)
+firmware/*.bin

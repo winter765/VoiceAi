@@ -1,5 +1,130 @@
 # Change Log
 
+## 2026-03-29
+
+### 软件 AEC 实现全双工语音打断（Barge-in）
+
+**背景**：bread-compact-wifi 板卡无硬件参考通道，无法使用传统 Device AEC。实现软件参考通道方案，支持 AI 播放时持续采集用户语音，由 AI 服务端决定是否打断。
+
+#### firmware-idf
+
+- **Kconfig.projbuild**：
+  - 新增 `CONFIG_USE_SOFTWARE_AEC` 配置选项
+  - 适用于无硬件参考通道的板卡（如 bread-compact-wifi）
+
+- **audio/audio_processor.h**：
+  - 新增 `FeedReference()` 虚函数接口（SOFTWARE_AEC 条件编译）
+
+- **audio/processors/afe_audio_processor.h**：
+  - 新增 `reference_buffer_`（参考信号缓冲区）
+  - 新增 `reference_resampler_`（24kHz→16kHz 重采样器）
+  - 新增 `FeedReference()` 方法声明
+
+- **audio/processors/afe_audio_processor.cc**：
+  - SOFTWARE_AEC 模式强制 `input_format = "MR"`（1 麦克风 + 1 软件参考）
+  - `FeedReference()`：接收播放音频，重采样到 16kHz，存入参考缓冲区
+  - `Feed()`：将麦克风数据与参考数据交织 `[M, R, M, R, ...]` 后送入 AFE
+  - `EnableDeviceAec()`：支持 SOFTWARE_AEC 配置
+
+- **audio/audio_service.cc**：
+  - `AudioOutputTask()`：播放前调用 `FeedReference()` 传递参考信号
+
+- **application.cc**：
+  - 构造函数：SOFTWARE_AEC 启用时设置 `aec_mode_ = kAecOnDeviceSide`
+  - `HandleStateChangedEvent()`：
+    - SPEAKING 状态始终启用唤醒词检测（修复与全双工冲突）
+  - 新增 `tts interrupt` 消息处理，调用 `ResetDecoder()` 清空播放缓冲
+
+- **protocols/elato_protocol.cc**：
+  - `AUDIO.COMMITTED` 消息转换为 `tts interrupt` 事件（用户打断信号）
+
+#### 技术细节
+
+- **数据流**：播放音频 (24kHz) → 重采样 (16kHz) → 参考缓冲区 → 与麦克风数据交织 → AFE AEC 处理
+- **打断机制**：
+  1. 本地唤醒词打断：说唤醒词（如 "Hey Willow"）打断 AI
+  2. AI 检测打断：直接说话，AI 检测到后发送 `AUDIO.COMMITTED` / `state: listening`
+- **内存**：参考缓冲区限制 200ms 数据量，防止无限增长
+
+#### 配置方法
+
+```
+idf.py menuconfig
+→ Xiaozhi Assistant
+  → [*] Enable Audio Noise Reduction
+  → [*] Enable Software AEC (No Hardware Reference)
+```
+
+---
+
+## 2026-03-30
+
+### OTA 固件升级服务
+
+实现完整的 OTA（Over-The-Air）固件升级功能，支持本地开发和生产环境。
+
+#### frontend-nextjs
+
+- **app/api/ota/route.ts**：版本检查 API
+  - 接收设备信息，返回最新固件版本
+  - 自动比较版本号，判断是否需要升级
+  - 返回服务器时间和 WebSocket 配置
+
+- **app/api/ota/download/[filename]/route.ts**：固件下载服务
+  - 从配置目录读取 bin 文件并返回
+  - 安全校验：防止目录遍历，仅允许 .bin 文件
+  - 环境变量 `FIRMWARE_DIR` 配置存放路径（默认 `./firmware`）
+
+- **db/firmware.ts**：数据库操作
+  - `getActiveFirmware()`：获取当前激活的固件版本
+  - `createFirmwareVersion()`：创建新版本记录
+  - `setActiveFirmware()`：设置激活版本
+
+- **firmware/**：固件文件存放目录（已添加到 .gitignore）
+
+#### supabase
+
+- **migrations/20260330000000_firmware_versions.sql**：
+  - 创建 `firmware_versions` 表
+  - 字段：version, file_url, board_type, force_update, is_active
+  - RLS 策略：匿名可读，认证用户可写
+
+#### firmware-idf
+
+- **application.cc**：
+  - `ActivationTask()` 添加 OTA 版本检查逻辑
+  - 检测到新版本时自动下载并升级
+  - 升级进度回调显示百分比和速度
+
+- **sdkconfig**：
+  - `CONFIG_OTA_URL` 配置 OTA 服务器地址
+
+- **boards/common/wifi_board.cc**：
+  - 本地开发配置：backend/websocket URL 改为 `192.168.124.3`
+
+- **protocols/elato_protocol.cc**：
+  - 本地开发配置：默认 WebSocket URL 改为本地
+
+### 修复：唤醒词打断后继续播放问题
+
+**问题**：唤醒词打断 AI 说话后，不到 1 秒又继续播放。
+
+**原因**：服务器在收到 `STOP_SESSION` 前已发送新的 `RESPONSE.CREATED`，设备收到后切换回 SPEAKING 状态。
+
+**修复**（application.cc）：
+- 收到 `tts start` 时检查 `aborted_` 标志
+- 如果刚打断且当前在 LISTENING 状态，忽略陈旧的 `tts start`
+- 收到用户语音（stt）时重置 `aborted_` 标志
+- 返回 IDLE 状态时重置 `aborted_` 标志
+
+### 服务启停脚本
+
+- **deno_start.sh / deno_stop.sh**：Deno 服务启停
+- **next_start.sh / next_stop.sh**：Next.js 服务启停
+- PID 文件存放在各自目录，日志输出到 `*.log`
+
+---
+
 ## 2026-03-28
 
 ### ESP-IDF 固件公网部署配置

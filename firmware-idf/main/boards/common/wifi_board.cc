@@ -54,7 +54,7 @@ void WifiBoard::StartNetwork() {
 
     // Initialize WiFi manager
     WifiManagerConfig config;
-    config.ssid_prefix = "ELATO-DEVICE";
+    config.ssid_prefix = "VOICE-DEVICE";
     config.language = Lang::CODE;
     wifi_manager.Initialize(config);
 
@@ -366,7 +366,7 @@ void WifiBoard::FetchElatoToken() {
 
     // Build URL for token endpoint
     Settings wifi_settings("wifi", false);
-    std::string backend_url = wifi_settings.GetString("backend_url", "http://35.162.7.133");
+    std::string backend_url = wifi_settings.GetString("backend_url", "http://192.168.124.3:3000");
     std::string token_url = backend_url + "/api/generate_auth_token?macAddress=" + mac;
 
     ESP_LOGI(TAG, "Token URL: %s", token_url.c_str());
@@ -443,7 +443,7 @@ void WifiBoard::FetchElatoToken() {
         ESP_LOGI(TAG, "Token received, WS URL: %s", ws_url->valuestring);
     } else {
         // Default WebSocket URL based on backend (direct to Deno, bypass nginx)
-        std::string default_ws_url = "ws://35.162.7.133:8080";
+        std::string default_ws_url = "ws://192.168.124.3:8000";
         settings.SetString("url", default_ws_url);
         ESP_LOGI(TAG, "Token received, using default WS URL: %s", default_ws_url.c_str());
     }
@@ -483,7 +483,7 @@ void WifiBoard::RegistrationPollTask(void* arg) {
 
         std::string mac = SystemInfo::GetMacAddress();
         Settings wifi_settings("wifi", false);
-        std::string backend_url = wifi_settings.GetString("backend_url", "http://35.162.7.133");
+        std::string backend_url = wifi_settings.GetString("backend_url", "http://192.168.124.3:3000");
         std::string token_url = backend_url + "/api/generate_auth_token?macAddress=" + mac;
 
         auto network = board->GetNetwork();
@@ -539,7 +539,7 @@ void WifiBoard::RegistrationPollTask(void* arg) {
                 settings.SetString("url", ws_url->valuestring);
                 ESP_LOGI(TAG, "WS URL: %s", ws_url->valuestring);
             } else {
-                std::string default_ws_url = "ws://35.162.7.133:8080";
+                std::string default_ws_url = "ws://192.168.124.3:8000";
                 settings.SetString("url", default_ws_url);
             }
 
