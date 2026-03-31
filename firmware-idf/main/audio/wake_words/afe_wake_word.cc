@@ -76,7 +76,7 @@ bool AfeWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
     afe_config->afe_perferred_core = 1;
     afe_config->afe_perferred_priority = 1;
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
-    
+
     afe_iface_ = esp_afe_handle_from_config(afe_config);
     afe_data_ = afe_iface_->create_from_config(afe_config);
 
@@ -196,19 +196,19 @@ void AfeWakeWord::EncodeWakeWordData() {
                 this_->wake_word_cv_.notify_all();
                 return;
             }
-            
+
             // Get frame size
             int frame_size = 0;
             int outbuf_size = 0;
             esp_opus_enc_get_frame_size(encoder_handle, &frame_size, &outbuf_size);
             frame_size = frame_size / sizeof(int16_t);
-            
+
             // Encode all PCM data
             int packets = 0;
             std::vector<int16_t> in_buffer;
             esp_audio_enc_in_frame_t in = {};
             esp_audio_enc_out_frame_t out = {};
-            
+
             for (auto& pcm: this_->wake_word_pcm_) {
                 if (in_buffer.empty()) {
                     in_buffer = std::move(pcm);
@@ -216,7 +216,7 @@ void AfeWakeWord::EncodeWakeWordData() {
                     in_buffer.reserve(in_buffer.size() + pcm.size());
                     in_buffer.insert(in_buffer.end(), pcm.begin(), pcm.end());
                 }
-                
+
                 while (in_buffer.size() >= frame_size) {
                     std::vector<uint8_t> opus_buf(outbuf_size);
                     in.buffer = (uint8_t *)(in_buffer.data());
@@ -224,7 +224,7 @@ void AfeWakeWord::EncodeWakeWordData() {
                     out.buffer = opus_buf.data();
                     out.len = outbuf_size;
                     out.encoded_bytes = 0;
-                    
+
                     ret = esp_opus_enc_process(encoder_handle, &in, &out);
                     if (ret == ESP_AUDIO_ERR_OK) {
                         std::lock_guard<std::mutex> lock(this_->wake_word_mutex_);
@@ -234,7 +234,7 @@ void AfeWakeWord::EncodeWakeWordData() {
                     } else {
                         ESP_LOGE(TAG, "Failed to encode audio, error code: %d", ret);
                     }
-                    
+
                     in_buffer.erase(in_buffer.begin(), in_buffer.begin() + frame_size);
                 }
             }

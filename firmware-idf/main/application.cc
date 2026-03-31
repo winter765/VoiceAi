@@ -325,6 +325,12 @@ void Application::HandleActivationDoneEvent() {
     SystemInfo::PrintHeapStats();
     SetDeviceState(kDeviceStateIdle);
 
+    // Manually trigger state changed handler since the event bit was set
+    // after we already read the bits in this event loop iteration
+    HandleStateChangedEvent();
+    // Clear the state changed bit to prevent double handling
+    xEventGroupClearBits(event_group_, MAIN_EVENT_STATE_CHANGED);
+
     has_server_time_ = ota_->HasServerTime();
 
     auto display = Board::GetInstance().GetDisplay();
@@ -584,11 +590,21 @@ void Application::InitializeProtocol() {
             auto state = cJSON_GetObjectItem(root, "state");
             if (strcmp(state->valuestring, "start") == 0) {
                 Schedule([this]() {
-                    // Ignore stale tts start if we just aborted (race with wake word interrupt)
+                    auto current_state = GetDeviceState();
+                    ESP_LOGI(TAG, "tts start received: aborted=%d, state=%d", aborted_, (int)current_state);
+
+                    // Ignore stale tts start if we just aborted (race with wake word/barge-in interrupt)
                     // The server might send RESPONSE.CREATED before receiving our STOP_SESSION
-                    if (aborted_ && GetDeviceState() == kDeviceStateListening) {
-                        ESP_LOGI(TAG, "Ignoring stale tts start after abort");
-                        return;
+                    // Use time-based debounce: ignore tts start within 3 seconds of abort
+                    if (aborted_) {
+                        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - abort_time_).count();
+                        if (current_state == kDeviceStateListening && elapsed < 3000) {
+                            ESP_LOGI(TAG, "Ignoring stale tts start after abort (%d ms ago)", (int)elapsed);
+                            return;
+                        }
+                        // Beyond debounce window or not in LISTENING state
+                        ESP_LOGI(TAG, "Allowing tts start: elapsed=%d ms, state=%d", (int)elapsed, (int)current_state);
                     }
                     aborted_ = false;
                     SetDeviceState(kDeviceStateSpeaking);
@@ -612,9 +628,12 @@ void Application::InitializeProtocol() {
                     });
                 }
             } else if (strcmp(state->valuestring, "interrupt") == 0) {
-                // User interrupted AI speech (barge-in)
-                ESP_LOGI(TAG, "User interrupted AI speech");
+                // User interrupted AI speech (barge-in detected by AI)
+                ESP_LOGI(TAG, "User interrupted AI speech (barge-in)");
                 Schedule([this]() {
+                    // Set abort flag to ignore quick AI responses to the interrupt
+                    aborted_ = true;
+                    abort_time_ = std::chrono::steady_clock::now();
                     // Clear playback buffer to stop current audio immediately
                     audio_service_.ResetDecoder();
                 });
@@ -623,8 +642,9 @@ void Application::InitializeProtocol() {
             auto text = cJSON_GetObjectItem(root, "text");
             if (cJSON_IsString(text)) {
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
-                // Reset aborted flag - user has spoken, subsequent AI responses are legitimate
-                aborted_ = false;
+                // Note: Don't reset aborted_ here - it causes race condition where
+                // AI's quick response to noise/wake-word-tail triggers playback.
+                // aborted_ is reset in tts start handler after debounce check.
                 // Reset listening timeout timer when user speech is detected
                 ResetListeningTimeoutTimer();
                 Schedule([display, message = std::string(text->valuestring)]() {
@@ -780,7 +800,12 @@ void Application::HandleToggleChatEvent() {
         }
         SetListeningMode(mode);
     } else if (state == kDeviceStateSpeaking) {
+        // Interrupt AI speech and switch to listening mode (same as wake word interrupt)
         AbortSpeaking(kAbortReasonNone);
+        // Clear send queue to avoid sending residues to server
+        while (audio_service_.PopPacketFromSendQueue());
+        play_popup_on_listening_ = true;
+        SetListeningMode(GetDefaultListeningMode());
     } else if (state == kDeviceStateListening) {
         protocol_->CloseAudioChannel();
     }
@@ -874,11 +899,13 @@ void Application::HandleWakeWordDetectedEvent() {
         // Channel already opened, continue directly
         ContinueWakeWordInvoke(wake_word);
     } else if (state == kDeviceStateSpeaking || state == kDeviceStateListening) {
+        ESP_LOGI(TAG, "Wake word interrupt: state=%d, calling AbortSpeaking", (int)state);
         AbortSpeaking(kAbortReasonWakeWordDetected);
         // Clear send queue to avoid sending residues to server
         while (audio_service_.PopPacketFromSendQueue());
 
         if (state == kDeviceStateListening) {
+            ESP_LOGI(TAG, "Was LISTENING, sending StartListening");
             protocol_->SendStartListening(GetDefaultListeningMode());
             audio_service_.ResetDecoder();
             audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
@@ -886,8 +913,10 @@ void Application::HandleWakeWordDetectedEvent() {
             audio_service_.EnableWakeWordDetection(true);
         } else {
             // Play popup sound and start listening again
+            ESP_LOGI(TAG, "Was SPEAKING, calling SetListeningMode");
             play_popup_on_listening_ = true;
             SetListeningMode(GetDefaultListeningMode());
+            ESP_LOGI(TAG, "SetListeningMode returned, new state=%d", (int)GetDeviceState());
         }
     } else if (state == kDeviceStateActivating) {
         // Restart the activation check if the wake word is detected during activation
@@ -945,6 +974,7 @@ void Application::HandleStateChangedEvent() {
             display->SetEmotion("neutral"); // Then set emotion (wechat mode checks child count)
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(true);
+            ESP_LOGI(TAG, "IDLE state: wake word detection enabled");
             // Stop listening timeout timer when returning to idle
             StopListeningTimeoutTimer();
             // Reset abort flag for clean state
@@ -996,7 +1026,14 @@ void Application::HandleStateChangedEvent() {
                 audio_service_.EnableVoiceProcessing(false);
             }
             // Enable wake word detection in speaking mode for barge-in
-            audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
+            // But disable when AEC is enabled (AEC already handles voice activity detection)
+#if defined(CONFIG_USE_DEVICE_AEC) || defined(CONFIG_USE_SOFTWARE_AEC)
+            audio_service_.EnableWakeWordDetection(false);
+            ESP_LOGI(TAG, "SPEAKING state: wake word detection disabled (AEC enabled)");
+#else
+            audio_service_.EnableWakeWordDetection(true);
+            ESP_LOGI(TAG, "SPEAKING state: wake word detection enabled for barge-in");
+#endif
             audio_service_.ResetDecoder();
             // Stop listening timeout timer when AI is speaking
             StopListeningTimeoutTimer();
@@ -1020,16 +1057,19 @@ void Application::Schedule(std::function<void()>&& callback) {
 }
 
 void Application::AbortSpeaking(AbortReason reason) {
-    ESP_LOGI(TAG, "Abort speaking");
+    ESP_LOGI(TAG, "AbortSpeaking called, reason=%d, setting aborted_=true", reason);
     aborted_ = true;
+    abort_time_ = std::chrono::steady_clock::now();
     if (protocol_) {
         protocol_->SendAbortSpeaking(reason);
     }
 }
 
 void Application::SetListeningMode(ListeningMode mode) {
+    ESP_LOGI(TAG, "SetListeningMode called, mode=%d, current_state=%d", (int)mode, (int)GetDeviceState());
     listening_mode_ = mode;
     SetDeviceState(kDeviceStateListening);
+    ESP_LOGI(TAG, "SetListeningMode: SetDeviceState done, state now=%d", (int)GetDeviceState());
 }
 
 ListeningMode Application::GetDefaultListeningMode() const {

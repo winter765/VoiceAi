@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { WebSocketServer } from "npm:ws";
 import type {
     WebSocket as WSWebSocket,
@@ -20,8 +20,82 @@ import { connectToHume } from "./models/hume.ts";
 import { connectToGrok } from "./models/grok.ts";
 import { connectToUltravox } from "./models/ultravox.ts";
 import { connectToEcho } from "./models/echo.ts";
+import { sessionManager } from "./session-manager.ts";
 
-const server = createServer();
+// --- REST API handlers ---
+function handleApiRequest(req: IncomingMessage, res: ServerResponse): boolean {
+    const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    const path = url.pathname;
+
+    // CORS headers
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+    // Handle preflight
+    if (req.method === "OPTIONS") {
+        res.writeHead(204);
+        res.end();
+        return true;
+    }
+
+    // GET /api/sessions - List all sessions
+    if (path === "/api/sessions" && req.method === "GET") {
+        const sessions = sessionManager.getAll();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+            count: sessions.length,
+            sessions,
+        }));
+        return true;
+    }
+
+    // DELETE /api/sessions - Close all sessions
+    if (path === "/api/sessions" && req.method === "DELETE") {
+        const count = sessionManager.closeAll();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+            success: true,
+            message: `Closed ${count} sessions`,
+        }));
+        return true;
+    }
+
+    // DELETE /api/sessions/:deviceId - Close specific session
+    const sessionMatch = path.match(/^\/api\/sessions\/(.+)$/);
+    if (sessionMatch && req.method === "DELETE") {
+        const deviceId = decodeURIComponent(sessionMatch[1]);
+        const success = sessionManager.forceClose(deviceId);
+        if (success) {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({
+                success: true,
+                message: `Closed session for device ${deviceId}`,
+            }));
+        } else {
+            res.writeHead(404, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({
+                success: false,
+                message: `No session found for device ${deviceId}`,
+            }));
+        }
+        return true;
+    }
+
+    // Not an API request
+    return false;
+}
+
+const server = createServer((req, res) => {
+    // Try to handle as API request
+    if (handleApiRequest(req, res)) {
+        return;
+    }
+
+    // Default response for non-API requests
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("ElatoAI WebSocket Server");
+});
 
 const wss: _WebSocketServer = new WebSocketServer({ noServer: true,
     perMessageDeflate: false,

@@ -74,7 +74,7 @@ bool ElatoProtocol::OpenAudioChannel() {
 
     if (url.empty()) {
         // Default to local development server
-        url = "ws://192.168.124.3:8000";
+        url = "ws://35.162.7.133:8080";
         ESP_LOGW(TAG, "WebSocket URL not configured, using default: %s", url.c_str());
     }
 
@@ -302,9 +302,10 @@ void ElatoProtocol::ParseServerMessage(const cJSON* root) {
 }
 
 void ElatoProtocol::SendWakeWordDetected(const std::string& wake_word) {
-    // For wake word detection, send START_SESSION to begin conversation
-    ESP_LOGI(TAG, "Wake word detected: %s, sending START_SESSION", wake_word.c_str());
-    SendText("{\"type\":\"instruction\",\"msg\":\"START_SESSION\"}");
+    // Only log wake word info, do NOT send START_SESSION here
+    // START_SESSION will be sent by SendStartListening() in HandleStateChangedEvent
+    // This prevents duplicate START_SESSION causing multiple sessions on server
+    ESP_LOGI(TAG, "Wake word detected: %s (session will start via SendStartListening)", wake_word.c_str());
 }
 
 void ElatoProtocol::SendStartListening(ListeningMode mode) {

@@ -1,5 +1,86 @@
 # Change Log
 
+## 2026-03-31
+
+### 服务器端会话管理 + 心跳检测
+
+**背景**：设备崩溃后 Ultravox 通话无法自动关闭，需要手动重启服务器。
+
+#### server-deno
+
+- **session-manager.ts**（新建）：
+  - `SessionManager` 类：集中管理所有活跃会话
+  - 按设备 ID（MAC 地址）管理会话
+  - 新连接时自动清理该设备的旧会话（解决崩溃重连导致的重复通话）
+  - 提供 `register()` / `unregister()` / `forceClose()` / `closeAll()` 方法
+
+- **models/ultravox.ts**：
+  - 集成 SessionManager，连接建立时注册，关闭时注销
+  - **心跳检测**：每 30 秒发送 WebSocket ping
+    - 连续 2 次无 pong 响应（60 秒）判定设备断线
+    - 自动关闭 Ultravox 通话并清理会话
+  - 新连接时检查是否有旧会话，有则先关闭（即时清理）
+
+- **main.ts**：
+  - 新增 REST API 接口：
+    - `GET /api/sessions` - 查询所有活跃会话
+    - `DELETE /api/sessions/:deviceId` - 关闭指定设备会话
+    - `DELETE /api/sessions` - 关闭所有会话
+
+#### 会话清理机制
+
+| 场景 | 清理方式 | 时效 |
+|------|----------|------|
+| 设备正常断开 | WebSocket close 事件 | 即时 |
+| 设备崩溃（TCP 断开） | WebSocket close 事件 | 即时 |
+| 设备崩溃（TCP 未断） | 心跳检测无响应 | 30-60 秒 |
+| 设备崩溃后重连 | SessionManager 自动清理旧会话 | 即时 |
+| 手动清理 | REST API | 即时 |
+
+### 固件：修复重复 START_SESSION 问题
+
+**问题**：唤醒词唤醒后服务器收到两次 `START_SESSION`，创建两个 Ultravox 通话。
+
+**原因**：
+1. `SendWakeWordDetected()` 发送 START_SESSION
+2. `HandleStateChangedEvent()` LISTENING 状态又发送 START_SESSION
+
+**修复**：
+- **protocols/elato_protocol.cc**：`SendWakeWordDetected()` 不再发送 START_SESSION
+- START_SESSION 统一由 `SendStartListening()` 发送
+
+### 固件：AEC 启用时关闭唤醒词打断
+
+- **application.cc**：
+  - SPEAKING 状态下，如果 AEC 启用（`CONFIG_USE_DEVICE_AEC` 或 `CONFIG_USE_SOFTWARE_AEC`），关闭唤醒词检测
+  - AEC 未启用时保持原有行为（启用唤醒词检测实现打断）
+
+### 固件：AGC 降噪
+
+- **audio/processors/afe_audio_processor.cc**：
+  - 启用 AGC（自动增益控制）
+  - `agc_mode = AFE_AGC_MODE_WEBRTC`
+  - `agc_compression_gain_db = 9`
+  - `agc_target_level_dbfs = 3`
+
+### 固件：修复休眠唤醒后崩溃问题
+
+**问题**：设备经过多次休眠唤醒后在 `FeedReference()` 中崩溃（堆内存损坏）。
+
+**原因**：`reference_resampler_` 的创建/关闭没有加锁保护，多线程竞争导致堆损坏。
+
+**修复**：
+- **audio/processors/afe_audio_processor.cc**：
+  - `FeedReference()` 将 mutex 锁提前到函数开头，保护 resampler 操作
+  - `Stop()` 清理 resampler，确保干净状态
+
+### 配置变更
+
+- **sdkconfig**：关闭软件 AEC（`CONFIG_USE_SOFTWARE_AEC` 注释掉）
+- 服务器地址切换到公网：`35.162.7.133`
+
+---
+
 ## 2026-03-29
 
 ### 软件 AEC 实现全双工语音打断（Barge-in）
@@ -105,17 +186,32 @@ idf.py menuconfig
 - **protocols/elato_protocol.cc**：
   - 本地开发配置：默认 WebSocket URL 改为本地
 
-### 修复：唤醒词打断后继续播放问题
+### 修复：唤醒词打断后继续播放问题（增强版）
 
-**问题**：唤醒词打断 AI 说话后，不到 1 秒又继续播放。
+**问题**：唤醒词打断 AI 说话后，1-2 秒内又继续播放语音。
 
-**原因**：服务器在收到 `STOP_SESSION` 前已发送新的 `RESPONSE.CREATED`，设备收到后切换回 SPEAKING 状态。
+**原因分析**：
+1. 唤醒词打断后，设备发送 `STOP_SESSION` 并立即进入 LISTENING 状态
+2. 设备发送 `START_SESSION` 开始新会话，并开始向 AI 发送音频
+3. AI 可能将唤醒词尾音或背景噪音误识别为用户语音
+4. AI 发送 `TRANSCRIPT.USER`（stt 消息）
+5. **关键问题**：stt 处理中过早重置 `aborted_ = false`
+6. AI 快速回复，发送 `RESPONSE.CREATED`
+7. 因 `aborted_` 已被重置，设备接受 `tts start` 并进入 SPEAKING
 
-**修复**（application.cc）：
-- 收到 `tts start` 时检查 `aborted_` 标志
-- 如果刚打断且当前在 LISTENING 状态，忽略陈旧的 `tts start`
-- 收到用户语音（stt）时重置 `aborted_` 标志
-- 返回 IDLE 状态时重置 `aborted_` 标志
+**修复方案**（时间戳防抖）：
+
+- **application.h**：
+  - 新增 `abort_time_` 字段记录打断时间
+
+- **application.cc**：
+  - `AbortSpeaking()`：记录 `abort_time_ = now()`
+  - `tts start` 处理：使用 3 秒防抖窗口
+    - 3 秒内：忽略 tts start（日志显示 "Ignoring stale tts start after abort"）
+    - 3 秒后：允许响应（日志显示 "Allowing tts start after abort debounce"）
+  - `stt` 处理：移除 `aborted_ = false`（不再在此处重置）
+
+**效果**：打断后 3 秒内的"快速响应"会被忽略，防止 AI 对噪音/唤醒词尾音的误判导致重新播放
 
 ### 服务启停脚本
 

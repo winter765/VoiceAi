@@ -1,6 +1,7 @@
 .vscode/
 .DS_Store
 local.md
+change_to*.sh
 
 # Server pid and log files
 *.pid

@@ -74,7 +74,10 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
         afe_config->ns_init = false;
     }
 
-    afe_config->agc_init = false;
+    afe_config->agc_init = true;
+    afe_config->agc_mode = AFE_AGC_MODE_WEBRTC;
+    afe_config->agc_compression_gain_db = 9;   // Compression gain in dB
+    afe_config->agc_target_level_dbfs = 3;     // Target level -3 dBFS
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
 
 #if defined(CONFIG_USE_DEVICE_AEC) || defined(CONFIG_USE_SOFTWARE_AEC)
@@ -170,6 +173,9 @@ void AfeAudioProcessor::FeedReference(const std::vector<int16_t>& data, int samp
         return;
     }
 
+    // Lock early to protect both resampler and buffer operations
+    std::lock_guard<std::mutex> lock(reference_buffer_mutex_);
+
     std::vector<int16_t> resampled_data;
 
     // Resample to 16kHz if needed (AEC requires 16kHz)
@@ -178,6 +184,7 @@ void AfeAudioProcessor::FeedReference(const std::vector<int16_t>& data, int samp
         if (reference_resampler_ == nullptr || reference_sample_rate_ != sample_rate) {
             if (reference_resampler_ != nullptr) {
                 esp_ae_rate_cvt_close(reference_resampler_);
+                reference_resampler_ = nullptr;
             }
             esp_ae_rate_cvt_cfg_t cfg = RATE_CVT_CFG(sample_rate, 16000, 1);
             auto ret = esp_ae_rate_cvt_open(&cfg, &reference_resampler_);
@@ -205,8 +212,7 @@ void AfeAudioProcessor::FeedReference(const std::vector<int16_t>& data, int samp
         resampled_data = data;
     }
 
-    // Add to reference buffer
-    std::lock_guard<std::mutex> lock(reference_buffer_mutex_);
+    // Add to reference buffer (already under lock)
     reference_buffer_.insert(reference_buffer_.end(), resampled_data.begin(), resampled_data.end());
 
     // Limit buffer size to prevent unbounded growth (keep ~200ms of data)
@@ -234,6 +240,12 @@ void AfeAudioProcessor::Stop() {
 #ifdef CONFIG_USE_SOFTWARE_AEC
     std::lock_guard<std::mutex> ref_lock(reference_buffer_mutex_);
     reference_buffer_.clear();
+    // Reset resampler to ensure clean state on next start
+    if (reference_resampler_ != nullptr) {
+        esp_ae_rate_cvt_close(reference_resampler_);
+        reference_resampler_ = nullptr;
+        reference_sample_rate_ = 0;
+    }
 #endif
 }
 

@@ -140,6 +140,7 @@ private:
 
     bool has_server_time_ = false;
     bool aborted_ = false;
+    std::chrono::steady_clock::time_point abort_time_;  // Time when abort was triggered
     bool assets_version_checked_ = false;
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
     int clock_ticks_ = 0;

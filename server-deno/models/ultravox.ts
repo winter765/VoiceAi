@@ -4,6 +4,12 @@ import type { RawData } from "npm:@types/ws";
 import { WebSocket } from "npm:ws";
 import { addConversation, getDeviceInfo } from "../supabase.ts";
 import { createOpusPacketizer, createOpusDecoder, isDev, ultravoxApiKey } from "../utils.ts";
+import { sessionManager } from "../session-manager.ts";
+
+// Heartbeat configuration
+const HEARTBEAT_INTERVAL_MS = 30000;  // 30 seconds
+const HEARTBEAT_TIMEOUT_MS = 5000;    // 5 seconds to wait for pong
+const MAX_MISSED_HEARTBEATS = 2;      // Close after 2 missed heartbeats
 
 const ULTRAVOX_API_URL = "https://api.ultravox.ai/api/calls";
 
@@ -74,6 +80,10 @@ export const connectToUltravox = async ({
 
     const voice = payload.user.personality?.oai_voice || "Mark";
 
+    // Get device ID (prefer MAC address, fallback to device_id)
+    const deviceId = user.device?.mac_address || user.device_id || "unknown";
+    console.log(`[UV] Device ID: ${deviceId}`);
+
     // Pre-fetch device info at connection start to avoid latency during audio playback
     let cachedVolume = 100;
     getDeviceInfo(supabase, user.user_id).then(device => {
@@ -86,6 +96,90 @@ export const connectToUltravox = async ({
     // --- On-demand session state ---
     let uvWs: WebSocket | null = null;
     let isSessionActive = false;
+
+    // --- Heartbeat state ---
+    let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+    let heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
+    let missedHeartbeats = 0;
+    let isAlive = true;
+
+    // Cleanup function for SessionManager
+    const cleanup = () => {
+        console.log(`[UV] Cleanup called for device ${deviceId}`);
+        stopHeartbeat();
+        stopSession();
+        try {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.close();
+            }
+        } catch (e) {
+            console.error(`[UV] Error closing WebSocket:`, e);
+        }
+    };
+
+    // Register session with SessionManager (will auto-close existing session for this device)
+    sessionManager.register(deviceId, {
+        deviceId,
+        callId: null,
+        ws,
+        uvWs: null,
+        cleanup,
+    });
+
+    // --- Heartbeat functions ---
+    function startHeartbeat() {
+        stopHeartbeat(); // Clear any existing
+        missedHeartbeats = 0;
+        isAlive = true;
+
+        heartbeatInterval = setInterval(() => {
+            if (!isAlive) {
+                missedHeartbeats++;
+                console.log(`[UV] Heartbeat missed for device ${deviceId}, count: ${missedHeartbeats}`);
+                if (missedHeartbeats >= MAX_MISSED_HEARTBEATS) {
+                    console.log(`[UV] Device ${deviceId} unresponsive, closing session`);
+                    stopHeartbeat();
+                    stopSession();
+                    sessionManager.unregister(deviceId);
+                    try {
+                        ws.terminate();
+                    } catch (e) {
+                        console.error(`[UV] Error terminating WebSocket:`, e);
+                    }
+                    return;
+                }
+            }
+            isAlive = false;
+            try {
+                ws.ping();
+            } catch (e) {
+                console.error(`[UV] Error sending ping:`, e);
+            }
+        }, HEARTBEAT_INTERVAL_MS);
+
+        console.log(`[UV] Heartbeat started for device ${deviceId}`);
+    }
+
+    function stopHeartbeat() {
+        if (heartbeatInterval) {
+            clearInterval(heartbeatInterval);
+            heartbeatInterval = null;
+        }
+        if (heartbeatTimeout) {
+            clearTimeout(heartbeatTimeout);
+            heartbeatTimeout = null;
+        }
+    }
+
+    // Listen for pong responses
+    ws.on("pong", () => {
+        isAlive = true;
+        missedHeartbeats = 0;
+        sessionManager.updateActivity(deviceId);
+    });
+
+    // Start heartbeat monitoring
+    startHeartbeat();
     let createdSent = false;
     let createdAcked = false; // true after RESPONSE.CREATED text msg is actually sent
     let waitingForNewTurn = false; // true after AI finishes speaking, waiting for user to speak
@@ -147,6 +241,9 @@ export const connectToUltravox = async ({
         const newUvWs = new WebSocket(callData.joinUrl);
         uvWs = newUvWs;
         isSessionActive = true;
+
+        // Update SessionManager with Ultravox call info
+        sessionManager.updateUltravoxInfo(deviceId, callData.callId, newUvWs);
 
         let uvAudioChunks = 0;
         let uvAudioBytes = 0;
@@ -365,13 +462,17 @@ export const connectToUltravox = async ({
 
     ws.on("error", (error: any) => {
         console.error("[UV] ESP32 WebSocket error:", error);
+        stopHeartbeat();
         stopSession();
+        sessionManager.unregister(deviceId);
     });
 
     ws.on("close", async (code: number, reason: string) => {
         console.log(`[UV] ESP32 WebSocket closed with code ${code}, reason: ${reason}`);
         console.log(`[DEBUG] Audio summary: ${audioPacketCount} packets, ${totalAudioBytes} bytes total`);
+        stopHeartbeat();
         stopSession();
+        sessionManager.unregister(deviceId);
         await closeHandler();
         opus.close();
         if (isDev && connectionPcmFile) {
@@ -380,5 +481,5 @@ export const connectToUltravox = async ({
     });
 
     // Resolve immediately — no Ultravox connection yet, just listening for instructions
-    console.log("[UV] Ultravox handler ready, waiting for START_SESSION from ESP32");
+    console.log(`[UV] Ultravox handler ready for device ${deviceId}, waiting for START_SESSION`);
 };
