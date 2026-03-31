@@ -1022,18 +1022,19 @@ void Application::HandleStateChangedEvent() {
         case kDeviceStateSpeaking:
             display->SetStatus(Lang::Strings::SPEAKING);
 
-            if (listening_mode_ != kListeningModeRealtime) {
+            if (listening_mode_ == kListeningModeRealtime) {
+                // Realtime mode (AEC enabled): keep voice processing running
+                // Audio continues to be sent to server for server-side barge-in detection
+                // Disable local wake word detection - Ultravox decides when to interrupt
+                audio_service_.EnableWakeWordDetection(false);
+                ESP_LOGI(TAG, "SPEAKING state: Realtime mode - voice processing ON, wake word OFF (server-side barge-in)");
+            } else {
+                // AutoStop mode (no AEC): stop voice processing, use local wake word for barge-in
                 audio_service_.EnableVoiceProcessing(false);
+                audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
+                ESP_LOGI(TAG, "SPEAKING state: AutoStop mode - voice processing OFF, wake word %s",
+                    audio_service_.IsAfeWakeWord() ? "ON" : "OFF");
             }
-            // Enable wake word detection in speaking mode for barge-in
-            // But disable when AEC is enabled (AEC already handles voice activity detection)
-#if defined(CONFIG_USE_DEVICE_AEC) || defined(CONFIG_USE_SOFTWARE_AEC)
-            audio_service_.EnableWakeWordDetection(false);
-            ESP_LOGI(TAG, "SPEAKING state: wake word detection disabled (AEC enabled)");
-#else
-            audio_service_.EnableWakeWordDetection(true);
-            ESP_LOGI(TAG, "SPEAKING state: wake word detection enabled for barge-in");
-#endif
             audio_service_.ResetDecoder();
             // Stop listening timeout timer when AI is speaking
             StopListeningTimeoutTimer();

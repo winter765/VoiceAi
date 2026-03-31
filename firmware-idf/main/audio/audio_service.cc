@@ -270,7 +270,13 @@ void AudioService::AudioInputTask() {
             int samples = 160; // 10ms
             std::vector<int16_t> data;
             if (ReadAudioData(data, 16000, samples)) {
+                static int feed_count = 0;
+                feed_count++;
                 if (bits & AS_EVENT_WAKE_WORD_RUNNING) {
+                    if (feed_count % 500 == 1) {  // Log every 5 seconds
+                        ESP_LOGI(TAG, "Feeding wake word: count=%d, processor_running=%d",
+                            feed_count, (bits & AS_EVENT_AUDIO_PROCESSOR_RUNNING) ? 1 : 0);
+                    }
                     wake_word_->Feed(data);
                 }
                 if (bits & AS_EVENT_AUDIO_PROCESSOR_RUNNING) {

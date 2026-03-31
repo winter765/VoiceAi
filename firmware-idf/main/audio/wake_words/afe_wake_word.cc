@@ -138,6 +138,7 @@ void AfeWakeWord::AudioDetectionTask() {
     ESP_LOGI(TAG, "Audio detection task started, feed size: %d fetch size: %d",
         feed_size, fetch_size);
 
+    int fetch_count = 0;
     while (true) {
         xEventGroupWaitBits(event_group_, DETECTION_RUNNING_EVENT, pdFALSE, pdTRUE, portMAX_DELAY);
 
@@ -146,10 +147,17 @@ void AfeWakeWord::AudioDetectionTask() {
             continue;;
         }
 
+        fetch_count++;
+        if (fetch_count % 100 == 1) {  // Log every ~3 seconds
+            ESP_LOGI(TAG, "Fetch count=%d, vad=%d, wakeup=%d",
+                fetch_count, res->vad_state, res->wakeup_state);
+        }
+
         // Store the wake word data for voice recognition, like who is speaking
         StoreWakeWordData(res->data, res->data_size / sizeof(int16_t));
 
         if (res->wakeup_state == WAKENET_DETECTED) {
+            ESP_LOGI(TAG, "WAKENET_DETECTED! fetch_count=%d", fetch_count);
             Stop();
             last_detected_wake_word_ = wake_words_[res->wakenet_model_index - 1];
 
