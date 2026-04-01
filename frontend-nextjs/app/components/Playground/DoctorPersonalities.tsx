@@ -8,6 +8,8 @@ interface DoctorPersonalitiesProps {
     disableButtons: boolean;
     selectedFilters: PersonalityFilter[];
     myPersonalities: IPersonality[];
+    currentUser?: IUser;
+    onPersonalityUpdated?: (updated: IPersonality) => void;
 }
 
 const DoctorPersonalities: React.FC<DoctorPersonalitiesProps> = ({
@@ -18,6 +20,8 @@ const DoctorPersonalities: React.FC<DoctorPersonalitiesProps> = ({
     disableButtons,
     selectedFilters,
     myPersonalities,
+    currentUser,
+    onPersonalityUpdated,
 }) => {
     const doctorPersonalities = allPersonalities.filter(
         (personality) => {
@@ -39,6 +43,8 @@ const DoctorPersonalities: React.FC<DoctorPersonalitiesProps> = ({
                 onPersonalityPicked={onPersonalityPicked}
                 title={"Doctor's Assistants"}
                 disableButtons={disableButtons}
+                currentUser={currentUser}
+                onPersonalityUpdated={onPersonalityUpdated}
             />
             {myPersonalities.length > 0 && (
                 <CharacterSection
@@ -49,6 +55,8 @@ const DoctorPersonalities: React.FC<DoctorPersonalitiesProps> = ({
                     onPersonalityPicked={onPersonalityPicked}
                     title={"My Characters"}
                     disableButtons={disableButtons}
+                    currentUser={currentUser}
+                    onPersonalityUpdated={onPersonalityUpdated}
                 />
             )}
             <CharacterSection
@@ -59,6 +67,8 @@ const DoctorPersonalities: React.FC<DoctorPersonalitiesProps> = ({
                 onPersonalityPicked={onPersonalityPicked}
                 title={"Characters"}
                 disableButtons={disableButtons}
+                currentUser={currentUser}
+                onPersonalityUpdated={onPersonalityUpdated}
             />
         </div>
     );

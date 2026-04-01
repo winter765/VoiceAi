@@ -68,3 +68,29 @@ export const getMyPersonalities = async (
 
     return data as IPersonality[];
 };
+
+export const updatePersonality = async (
+    supabase: SupabaseClient,
+    personalityId: string,
+    updates: Partial<Pick<IPersonality,
+        | "title"
+        | "short_description"
+        | "character_prompt"
+        | "first_message_prompt"
+        | "voice_prompt"
+    >>
+): Promise<IPersonality | null> => {
+    const { data, error } = await supabase
+        .from("personalities")
+        .update(updates)
+        .eq("personality_id", personalityId)
+        .select()
+        .single();
+
+    if (error) {
+        console.error("Error updating personality:", error);
+        throw error;
+    }
+
+    return data as IPersonality;
+};

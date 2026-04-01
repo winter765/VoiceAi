@@ -8,6 +8,8 @@ interface UserPersonalitiesProps {
     disableButtons: boolean;
     selectedFilters: PersonalityFilter[];
     myPersonalities: IPersonality[];
+    currentUser?: IUser;
+    onPersonalityUpdated?: (updated: IPersonality) => void;
 }
 
 const UserPersonalities: React.FC<UserPersonalitiesProps> = ({
@@ -18,6 +20,8 @@ const UserPersonalities: React.FC<UserPersonalitiesProps> = ({
     disableButtons,
     selectedFilters,
     myPersonalities,
+    currentUser,
+    onPersonalityUpdated,
 }) => {
     return (
         <div className="flex flex-col gap-8 w-full">
@@ -30,6 +34,8 @@ const UserPersonalities: React.FC<UserPersonalitiesProps> = ({
                     onPersonalityPicked={onPersonalityPicked}
                     title={"My Characters"}
                     disableButtons={disableButtons}
+                    currentUser={currentUser}
+                    onPersonalityUpdated={onPersonalityUpdated}
                 />
             )}
         <CharacterSection
@@ -40,6 +46,8 @@ const UserPersonalities: React.FC<UserPersonalitiesProps> = ({
             title={"Characters"}
             disableButtons={disableButtons}
             selectedFilters={selectedFilters}
+            currentUser={currentUser}
+            onPersonalityUpdated={onPersonalityUpdated}
         />
         </div>
 

@@ -13,7 +13,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { toast } from "@/components/ui/use-toast";
 import { useRouter } from "next/navigation";
 import { z } from "zod";
-import { emotionOptions, geminiVoices, grokVoices, openaiVoices, r2UrlAudio } from "@/lib/data";
+import { emotionOptions, geminiVoices, grokVoices, openaiVoices, ultravoxVoices, r2UrlAudio } from "@/lib/data";
 import EmojiComponent from "./EmojiComponent";
 import { PitchFactors } from "@/lib/utils";
 import { Slider } from "@/components/ui/slider";
@@ -26,7 +26,8 @@ interface SettingsDashboardProps {
 }
 
 const formSchema = z.object({
-  provider: z.enum(["openai", "gemini", "grok"]),
+  // provider: z.enum(["openai", "gemini", "grok"]),
+  provider: z.enum(["ultravox"]),
   title: z.string().min(2, "Minimum 2 characters").max(50, "Maximum 50 characters"),
   description: z.string().min(50, "Minimum 50 characters").max(200, "Maximum 200 characters"),
   prompt: z.string().min(100, "Minimum 100 characters").max(1000, "Maximum 1000 characters"),
@@ -50,7 +51,7 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [formData, setFormData] = useState({
-    provider: 'openai' as ModelProvider,
+    provider: 'ultravox' as ModelProvider,
     title: '',
     description: '',
     prompt: '',
@@ -66,7 +67,7 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
   const [touchedFields, setTouchedFields] = useState<Record<string, boolean>>({});
   const [formErrors, setFormErrors] = useState<Partial<Record<keyof FormData | 'features', string>>>({});
   const [previewingVoice, setPreviewingVoice] = useState<string | null>(null);
-  const [expandedProvider, setExpandedProvider] = useState<ModelProvider | null>("openai");
+  const [expandedProvider, setExpandedProvider] = useState<ModelProvider | null>("ultravox");
 
   const handleBlur = (field: keyof FormData | 'features') => {
     // Mark the field as touched
@@ -251,6 +252,9 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
   }
 
   const getProviderBadge = (provider: ModelProvider) => {
+    if (provider === "ultravox") {
+      return { label: "Ultravox", className: "bg-rose-500 text-white" };
+    }
     if (provider === "openai") {
       return { label: "OpenAI", className: "bg-emerald-500 text-white" };
     }
@@ -292,9 +296,10 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
 
               <div className="grid grid-cols-3 gap-3">
                 {([
-                  { provider: "openai" as ModelProvider, label: "OpenAI" },
-                  { provider: "gemini" as ModelProvider, label: "Gemini" },
-                  { provider: "grok" as ModelProvider, label: "Grok" },
+                  // { provider: "openai" as ModelProvider, label: "OpenAI" },
+                  // { provider: "gemini" as ModelProvider, label: "Gemini" },
+                  // { provider: "grok" as ModelProvider, label: "Grok" },
+                  { provider: "ultravox" as ModelProvider, label: "Ultravox" }
                 ]).map((p) => (
                   <button
                     key={p.provider}
@@ -319,7 +324,7 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                       <div className="flex flex-col sm:flex-row gap-2 items-center justify-between">
                         <span className="font-semibold text-gray-900">{p.label}</span>
                         <span className="text-xs text-gray-500">
-                          {p.provider === "openai" ? openaiVoices.length : p.provider === "gemini" ? geminiVoices.length : grokVoices.length} voices
+                          {p.provider === "ultravox" ? ultravoxVoices.length : p.provider === "openai" ? openaiVoices.length : p.provider === "gemini" ? geminiVoices.length : grokVoices.length} voices
                         </span>
                       </div>
                     </div>
@@ -330,7 +335,7 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
               {expandedProvider && (
                 <div className="overflow-x-auto px-2">
                   <div className="flex gap-3 w-max py-2">
-                    {(expandedProvider === "openai" ? openaiVoices : expandedProvider === "gemini" ? geminiVoices : grokVoices).map((voice: VoiceType) => (
+                    {(expandedProvider === "ultravox" ? ultravoxVoices : expandedProvider === "openai" ? openaiVoices : expandedProvider === "gemini" ? geminiVoices : grokVoices).map((voice: VoiceType) => (
                       <div
                         key={voice.id}
                         className={`relative rounded-xl border-2 p-4 transition-all cursor-pointer hover:scale-[1.02] hover:shadow-lg w-48 flex-shrink-0 ${formData.voice === voice.id

@@ -1,18 +1,24 @@
 import { Button } from "@/components/ui/button";
 import {
     Sheet,
-    SheetClose,
     SheetContent,
     SheetTrigger,
 } from "@/components/ui/sheet";
 import Image from "next/image";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import { Airplay, Check, MonitorSmartphone, Phone } from "lucide-react";
+import { Check, Pencil, X, Save } from "lucide-react";
 import { useState } from "react";
 import { Drawer, DrawerContent, DrawerTrigger } from "@/components/ui/drawer";
 import { getPersonalityImageSrc } from "@/lib/utils";
 import { EmojiComponent } from "./EmojiImage";
 import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { updatePersonality } from "@/db/personalities";
+import { createClient } from "@/utils/supabase/client";
+import { toast } from "@/components/ui/use-toast";
+import { canEditPersonality } from "@/lib/admin";
 
 interface ModifyCharacterSheetProps {
     openPersonality: IPersonality;
@@ -21,6 +27,8 @@ interface ModifyCharacterSheetProps {
     onPersonalityPicked: (personalityIdPicked: string) => void;
     languageState: string;
     disableButtons: boolean;
+    currentUser?: IUser;
+    onPersonalityUpdated?: (updated: IPersonality) => void;
 }
 
 const ModifyCharacterSheet: React.FC<ModifyCharacterSheetProps> = ({
@@ -30,20 +38,114 @@ const ModifyCharacterSheet: React.FC<ModifyCharacterSheetProps> = ({
     onPersonalityPicked,
     languageState,
     disableButtons,
+    currentUser,
+    onPersonalityUpdated,
 }) => {
     const [isSent, setIsSent] = useState(false);
+    const [isEditMode, setIsEditMode] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
+    const [editForm, setEditForm] = useState({
+        title: openPersonality.title,
+        short_description: openPersonality.short_description,
+        character_prompt: openPersonality.character_prompt,
+        first_message_prompt: openPersonality.first_message_prompt,
+        voice_prompt: openPersonality.voice_prompt,
+    });
 
+    const supabase = createClient();
     const isDesktop = useMediaQuery("(min-width: 768px)");
 
     const isPersonalCharacter = openPersonality.creator_id !== null;
     const isDoctor = openPersonality.is_doctor;
 
+    const canEdit = currentUser && canEditPersonality(
+        currentUser.email,
+        currentUser.user_id,
+        openPersonality
+    );
+
+    const handleSave = async () => {
+        if (!openPersonality.personality_id) return;
+
+        setIsSaving(true);
+        try {
+            const updated = await updatePersonality(
+                supabase,
+                openPersonality.personality_id,
+                editForm
+            );
+            if (updated) {
+                toast({
+                    title: "Saved",
+                    description: "Character updated successfully",
+                });
+                setIsEditMode(false);
+                onPersonalityUpdated?.(updated);
+            }
+        } catch (error) {
+            toast({
+                title: "Error",
+                description: "Failed to update character",
+                variant: "destructive",
+            });
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const handleCancelEdit = () => {
+        setEditForm({
+            title: openPersonality.title,
+            short_description: openPersonality.short_description,
+            character_prompt: openPersonality.character_prompt,
+            first_message_prompt: openPersonality.first_message_prompt,
+            voice_prompt: openPersonality.voice_prompt,
+        });
+        setIsEditMode(false);
+    };
+
     const ButtonsComponent = () => {
+        if (isEditMode) {
+            return (
+                <div className="flex flex-row gap-2 p-4">
+                    <Button
+                        size="lg"
+                        variant="outline"
+                        className="flex-1 rounded-full"
+                        onClick={handleCancelEdit}
+                        disabled={isSaving}
+                    >
+                        <X className="h-5 w-5 mr-2" />
+                        Cancel
+                    </Button>
+                    <Button
+                        size="lg"
+                        className="flex-1 rounded-full bg-green-500 hover:bg-green-600"
+                        onClick={handleSave}
+                        disabled={isSaving}
+                    >
+                        <Save className="h-5 w-5 mr-2" />
+                        {isSaving ? "Saving..." : "Save"}
+                    </Button>
+                </div>
+            );
+        }
+
         return (
-            <div className="flex flex-row gap-4 p-4 ">
+            <div className="flex flex-row gap-2 p-4">
+                {canEdit && (
+                    <Button
+                        size="lg"
+                        variant="outline"
+                        className="rounded-full"
+                        onClick={() => setIsEditMode(true)}
+                    >
+                        <Pencil className="h-5 w-5" />
+                    </Button>
+                )}
                 <Button
                     size="lg"
-                    className={`w-full rounded-full text-sm md:text-lg flex flex-row items-center gap-1 md:gap-2 transition-colors duration-300 ${
+                    className={`flex-1 rounded-full text-sm md:text-lg flex flex-row items-center gap-1 md:gap-2 transition-colors duration-300 ${
                         isSent || isCurrentPersonality
                             ? "bg-green-500 hover:bg-green-600"
                             : ""
@@ -90,54 +192,105 @@ const ModifyCharacterSheet: React.FC<ModifyCharacterSheetProps> = ({
         );
     };
 
-    const ContentComponent = () => {
-        return (
-            <div className="container mx-auto p-4 max-w-4xl">
-                <div className="flex flex-col items-center gap-6">
-                    {isPersonalCharacter ? (
-                        <div className="relative w-full h-[100px] sm:h-[200px] flex items-center justify-center">
-                        <EmojiComponent personality={openPersonality} size={100} />
-                        </div>
-                    ) : (
-                        <div className="relative w-full h-[300px] sm:h-[400px]">
-                            <Image
-                                src={getPersonalityImageSrc(openPersonality.key)}
-                                alt={openPersonality.title}
-                                className="rounded-lg object-top sm:object-center object-cover"
-                                fill
-                                // style={{
-                                //     objectFit: "cover",
-                            //     objectPosition: "top sm:center",
-                            // }}
-                            />
-                        </div>
-                    )}
-                    <div className="space-y-2 text-left w-full relative">
-                    <div className="absolute top-0 right-0">
-                    <Badge variant="outline">
-                        {openPersonality.provider}
-                    </Badge>
-                </div>
-                    <div className="flex flex-row items-center gap-2">
-                        <h3 className="text-xl font-semibold">
-                            {openPersonality.title}
-                        </h3>
-                    </div>
+    const editFormContent = (
+        <div className="container mx-auto p-4 max-w-4xl space-y-4">
+            <h3 className="text-xl font-semibold">Edit Character</h3>
 
-                    <p className="text-gray-400">
-                        {openPersonality.subtitle}
-                    </p>
-                    <p className="text-gray-600">
-                        {openPersonality.short_description}
-                    </p>
-                    {(isPersonalCharacter || isDoctor) && (
-                        <PersonalCharacterComponent />
-                    )}
-                </div>
-                </div>
+            <div className="space-y-2">
+                <Label htmlFor="edit-title">Title</Label>
+                <Input
+                    id="edit-title"
+                    value={editForm.title}
+                    onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
+                />
             </div>
-        );
-    };
+
+            <div className="space-y-2">
+                <Label htmlFor="edit-description">Description</Label>
+                <Textarea
+                    id="edit-description"
+                    rows={3}
+                    value={editForm.short_description}
+                    onChange={(e) => setEditForm({ ...editForm, short_description: e.target.value })}
+                />
+            </div>
+
+            <div className="space-y-2">
+                <Label htmlFor="edit-character-prompt">Character Prompt</Label>
+                <Textarea
+                    id="edit-character-prompt"
+                    rows={8}
+                    value={editForm.character_prompt}
+                    onChange={(e) => setEditForm({ ...editForm, character_prompt: e.target.value })}
+                />
+            </div>
+
+            <div className="space-y-2">
+                <Label htmlFor="edit-first-message">First Message Prompt</Label>
+                <Textarea
+                    id="edit-first-message"
+                    rows={3}
+                    value={editForm.first_message_prompt}
+                    onChange={(e) => setEditForm({ ...editForm, first_message_prompt: e.target.value })}
+                />
+            </div>
+
+            <div className="space-y-2">
+                <Label htmlFor="edit-voice-prompt">Voice Prompt</Label>
+                <Textarea
+                    id="edit-voice-prompt"
+                    rows={3}
+                    value={editForm.voice_prompt}
+                    onChange={(e) => setEditForm({ ...editForm, voice_prompt: e.target.value })}
+                />
+            </div>
+        </div>
+    );
+
+    const viewContent = (
+        <div className="container mx-auto p-4 max-w-4xl">
+            <div className="flex flex-col items-center gap-6">
+                {isPersonalCharacter ? (
+                    <div className="relative w-full h-[100px] sm:h-[200px] flex items-center justify-center">
+                    <EmojiComponent personality={openPersonality} size={100} />
+                    </div>
+                ) : (
+                    <div className="relative w-full h-[300px] sm:h-[400px]">
+                        <Image
+                            src={getPersonalityImageSrc(openPersonality.key)}
+                            alt={openPersonality.title}
+                            className="rounded-lg object-top sm:object-center object-cover"
+                            fill
+                        />
+                    </div>
+                )}
+                <div className="space-y-2 text-left w-full relative">
+                <div className="absolute top-0 right-0">
+                <Badge variant="outline">
+                    {openPersonality.provider}
+                </Badge>
+            </div>
+                <div className="flex flex-row items-center gap-2">
+                    <h3 className="text-xl font-semibold">
+                        {openPersonality.title}
+                    </h3>
+                </div>
+
+                <p className="text-gray-400">
+                    {openPersonality.subtitle}
+                </p>
+                <p className="text-gray-600">
+                    {openPersonality.short_description}
+                </p>
+                {(isPersonalCharacter || isDoctor) && (
+                    <PersonalCharacterComponent />
+                )}
+            </div>
+            </div>
+        </div>
+    );
+
+    const contentElement = isEditMode ? editFormContent : viewContent;
 
     if (isDesktop) {
         return (
@@ -150,7 +303,7 @@ const ModifyCharacterSheet: React.FC<ModifyCharacterSheetProps> = ({
                 >
                     <div className="min-h-[100dvh] flex flex-col">
                         <div className="flex-1">
-                            <ContentComponent />
+                            {contentElement}
                         </div>
                         <div className="sticky bottom-0 w-full bg-background border-t">
                             <ButtonsComponent />
@@ -170,7 +323,7 @@ const ModifyCharacterSheet: React.FC<ModifyCharacterSheetProps> = ({
                         <ButtonsComponent />
                     </div>
                     <div className="flex-1 overflow-y-auto">
-                        <ContentComponent />
+                        {contentElement}
                     </div>
                 </div>
             </DrawerContent>

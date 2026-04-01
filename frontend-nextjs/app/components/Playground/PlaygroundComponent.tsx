@@ -20,8 +20,8 @@ interface PlaygroundProps {
 
 const Playground: React.FC<PlaygroundProps> = ({
     currentUser,
-    allPersonalities,
-    myPersonalities,
+    allPersonalities: initialAllPersonalities,
+    myPersonalities: initialMyPersonalities,
 }) => {
     const isDoctor = currentUser.user_info.user_type === "doctor";
 
@@ -35,6 +35,9 @@ const Playground: React.FC<PlaygroundProps> = ({
         []
     );
 
+    const [allPersonalities, setAllPersonalities] = useState<IPersonality[]>(initialAllPersonalities);
+    const [myPersonalities, setMyPersonalities] = useState<IPersonality[]>(initialMyPersonalities);
+
     const onPersonalityPicked = async (personalityIdPicked: string) => {
         setPersonalityIdState(personalityIdPicked);
         await updateUser(
@@ -43,6 +46,15 @@ const Playground: React.FC<PlaygroundProps> = ({
                 personality_id: personalityIdPicked,
             },
             currentUser.user_id
+        );
+    };
+
+    const onPersonalityUpdated = (updated: IPersonality) => {
+        setAllPersonalities(prev =>
+            prev.map(p => p.personality_id === updated.personality_id ? updated : p)
+        );
+        setMyPersonalities(prev =>
+            prev.map(p => p.personality_id === updated.personality_id ? updated : p)
         );
     };
 
@@ -82,10 +94,12 @@ const Playground: React.FC<PlaygroundProps> = ({
                             personalityIdState={personalityIdState}
                             languageState={'en-US'}
                             disableButtons={false}
-                            allPersonalities={isDoctor 
+                            allPersonalities={isDoctor
                                 ? allPersonalities.filter(p => p.is_story || p.is_doctor)
-                                : allPersonalities}                            
+                                : allPersonalities}
                             myPersonalities={myPersonalities}
+                            currentUser={currentUser}
+                            onPersonalityUpdated={onPersonalityUpdated}
                         />
                     </div>
             </div>

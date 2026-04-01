@@ -99,6 +99,14 @@ declare global {
     }
 
     type VoiceType =
+        {
+            provider: "ultravox";
+            id: UltravoxVoice;
+            name: string;
+            description: string;
+            color: string;
+            emoji?: string;
+        }
         | {
             provider: "openai";
             id: OaiVoice;
@@ -124,7 +132,9 @@ declare global {
             emoji?: string;
         };
 
-    type ModelProvider = "openai" | "gemini" | "grok" | "elevenlabs" | "hume";
+    type ModelProvider = "ultravox" | "openai" | "gemini" | "grok" | "elevenlabs" | "hume";
+
+    type UltravoxVoice = "c846dea0-4083-4313-be97-6bf0b7cdc344";
 
     type GrokVoice =
         | "Ara"

@@ -37,7 +37,7 @@ const DeviceBindingStep: React.FC<{
             const { data } = await supabase
                 .from("users")
                 .select("device_id")
-                .eq("id", userId)
+                .eq("user_id", userId)
                 .single();
             if (data?.device_id) {
                 setStatus("success");

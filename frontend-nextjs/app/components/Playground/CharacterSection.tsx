@@ -20,6 +20,8 @@ interface CharacterSectionProps {
     title: string;
     disableButtons: boolean;
     selectedFilters: PersonalityFilter[];
+    currentUser?: IUser;
+    onPersonalityUpdated?: (updated: IPersonality) => void;
 }
 
 const CharacterSection = ({
@@ -30,6 +32,8 @@ const CharacterSection = ({
     title,
     disableButtons,
     selectedFilters,
+    currentUser,
+    onPersonalityUpdated,
 }: CharacterSectionProps) => {
 
     const filteredPersonalities = allPersonalities.filter((personality) => {
@@ -59,6 +63,8 @@ const CharacterSection = ({
                         isCurrentPersonality={isCurrentPersonality}
                         onPersonalityPicked={onPersonalityPicked}
                         disableButtons={disableButtons}
+                        currentUser={currentUser}
+                        onPersonalityUpdated={onPersonalityUpdated}
                     >
                         <Card
                             className={cn(

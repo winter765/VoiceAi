@@ -39,6 +39,17 @@ export const DEVICE_COST = 55;
 export const ORIGINAL_COST = 111;
 export const SUBSCRIPTION_COST = 10;
 
+export const ultravoxVoices: VoiceType[] = [
+    {
+        id: "c846dea0-4083-4313-be97-6bf0b7cdc344",
+        name: "Santa Claus",
+        description: "Santa Claus voice",
+        color: "bg-red-100",
+        emoji: "🧸",
+        provider: "ultravox"
+    }
+];
+
 export const openaiVoices: VoiceType[] = [
     {
         id: "alloy",
