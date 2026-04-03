@@ -46,8 +46,15 @@ Ota::~Ota() {
 std::string Ota::GetCheckVersionUrl() {
     Settings settings("wifi", false);
     std::string url = settings.GetString("ota_url");
+
     if (url.empty()) {
-        url = CONFIG_OTA_URL;
+        // Use CONFIG_OTA_URL if set, otherwise construct from backend_url
+        if (strlen(CONFIG_OTA_URL) > 0) {
+            url = CONFIG_OTA_URL;
+        } else {
+            std::string backend_url = settings.GetString("backend_url", CONFIG_ELATO_BACKEND_URL);
+            url = backend_url + "/api/ota";
+        }
     }
     return url;
 }

@@ -366,7 +366,7 @@ void WifiBoard::FetchElatoToken() {
 
     // Build URL for token endpoint
     Settings wifi_settings("wifi", false);
-    std::string backend_url = wifi_settings.GetString("backend_url", "http://35.162.7.133");
+    std::string backend_url = wifi_settings.GetString("backend_url", CONFIG_ELATO_BACKEND_URL);
     std::string token_url = backend_url + "/api/generate_auth_token?macAddress=" + mac;
 
     ESP_LOGI(TAG, "Token URL: %s", token_url.c_str());
@@ -437,15 +437,13 @@ void WifiBoard::FetchElatoToken() {
     Settings settings("websocket", true);
     settings.SetString("token", token->valuestring);
 
-    // Store WebSocket URL if provided, otherwise construct from backend_url
+    // Store WebSocket URL if provided, otherwise use Kconfig default
     if (cJSON_IsString(ws_url)) {
         settings.SetString("url", ws_url->valuestring);
         ESP_LOGI(TAG, "Token received, WS URL: %s", ws_url->valuestring);
     } else {
-        // Default WebSocket URL based on backend (direct to Deno, bypass nginx)
-        std::string default_ws_url = "ws://35.162.7.133:8080";
-        settings.SetString("url", default_ws_url);
-        ESP_LOGI(TAG, "Token received, using default WS URL: %s", default_ws_url.c_str());
+        settings.SetString("url", CONFIG_ELATO_WS_URL);
+        ESP_LOGI(TAG, "Token received, using default WS URL: %s", CONFIG_ELATO_WS_URL);
     }
 
     cJSON_Delete(root);
@@ -483,7 +481,7 @@ void WifiBoard::RegistrationPollTask(void* arg) {
 
         std::string mac = SystemInfo::GetMacAddress();
         Settings wifi_settings("wifi", false);
-        std::string backend_url = wifi_settings.GetString("backend_url", "http://35.162.7.133");
+        std::string backend_url = wifi_settings.GetString("backend_url", CONFIG_ELATO_BACKEND_URL);
         std::string token_url = backend_url + "/api/generate_auth_token?macAddress=" + mac;
 
         auto network = board->GetNetwork();
@@ -539,8 +537,7 @@ void WifiBoard::RegistrationPollTask(void* arg) {
                 settings.SetString("url", ws_url->valuestring);
                 ESP_LOGI(TAG, "WS URL: %s", ws_url->valuestring);
             } else {
-                std::string default_ws_url = "ws://35.162.7.133:8080";
-                settings.SetString("url", default_ws_url);
+                settings.SetString("url", CONFIG_ELATO_WS_URL);
             }
 
             cJSON_Delete(root);

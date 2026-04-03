@@ -599,7 +599,9 @@ CONFIG_PARTITION_TABLE_MD5=y
 #
 # Xiaozhi Assistant
 #
-CONFIG_OTA_URL="http://35.162.7.133/api/ota"
+CONFIG_OTA_URL=""
+CONFIG_ELATO_BACKEND_URL="https://console.novarian.ai"
+CONFIG_ELATO_WS_URL="wss://voice.novarian.ai"
 # CONFIG_FLASH_NONE_ASSETS is not set
 CONFIG_FLASH_DEFAULT_ASSETS=y
 # CONFIG_FLASH_CUSTOM_ASSETS is not set

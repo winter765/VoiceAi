@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.5] - 2026-04-03
+
+### 公网域名配置
+
+#### 固件端 (firmware-idf)
+- 新增 Kconfig 配置项 `CONFIG_ELATO_BACKEND_URL` 和 `CONFIG_ELATO_WS_URL`
+- 所有 URL 从 Kconfig 读取，代码中不再硬编码
+- 默认值：`https://console.novarian.ai` 和 `wss://voice.novarian.ai`
+- 支持通过 `idf.py menuconfig` 或直接修改 sdkconfig 切换环境
+
+#### 前端 (frontend-nextjs)
+- `api/ota/route.ts`: WebSocket URL 默认值改为 `wss://voice.novarian.ai`
+
+#### 域名配置
+- WebSocket (Deno): `wss://voice.novarian.ai`
+- Next.js 前端: `https://console.novarian.ai`
+- SSL 证书: Let's Encrypt (certbot)
+
+---
+
 ## [1.0.1] - 2026-03-26
 
 ### 公网部署修复

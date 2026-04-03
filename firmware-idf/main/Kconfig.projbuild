@@ -7,6 +7,18 @@ config OTA_URL
         The application will access this URL to check for new firmwares and server address.
         Leave empty to skip OTA check and use default ElatoAI WebSocket URL.
 
+config ELATO_BACKEND_URL
+    string "ElatoAI Backend URL"
+    default "https://console.novarian.ai"
+    help
+        Backend server URL for token generation and OTA.
+
+config ELATO_WS_URL
+    string "ElatoAI WebSocket URL"
+    default "wss://voice.novarian.ai"
+    help
+        WebSocket server URL for audio streaming.
+
 choice
     prompt "Flash Assets"
     default FLASH_DEFAULT_ASSETS if !USE_EMOTE_MESSAGE_STYLE

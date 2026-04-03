@@ -116,7 +116,7 @@ export async function POST(req: Request) {
         }
 
         // WebSocket config (optional - device might already have this from auth)
-        const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://35.162.7.133:8080";
+        const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "wss://voice.novarian.ai";
         response.websocket = {
             url: wsUrl,
         };
