@@ -203,6 +203,7 @@ const ModifyCharacterSheet: React.FC<ModifyCharacterSheetProps> = ({
                     value={editForm.title}
                     onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
                 />
+                <p className="text-sm text-right text-gray-500">{editForm.title?.length || 0}/50</p>
             </div>
 
             <div className="space-y-2">
@@ -213,6 +214,7 @@ const ModifyCharacterSheet: React.FC<ModifyCharacterSheetProps> = ({
                     value={editForm.short_description}
                     onChange={(e) => setEditForm({ ...editForm, short_description: e.target.value })}
                 />
+                <p className="text-sm text-right text-gray-500">{editForm.short_description?.length || 0}/200</p>
             </div>
 
             <div className="space-y-2">
@@ -223,6 +225,7 @@ const ModifyCharacterSheet: React.FC<ModifyCharacterSheetProps> = ({
                     value={editForm.character_prompt}
                     onChange={(e) => setEditForm({ ...editForm, character_prompt: e.target.value })}
                 />
+                <p className="text-sm text-right text-gray-500">{editForm.character_prompt?.length || 0}/5000</p>
             </div>
 
             <div className="space-y-2">
@@ -233,6 +236,7 @@ const ModifyCharacterSheet: React.FC<ModifyCharacterSheetProps> = ({
                     value={editForm.first_message_prompt}
                     onChange={(e) => setEditForm({ ...editForm, first_message_prompt: e.target.value })}
                 />
+                <p className="text-sm text-right text-gray-500">{editForm.first_message_prompt?.length || 0}/150</p>
             </div>
 
             <div className="space-y-2">
@@ -243,6 +247,7 @@ const ModifyCharacterSheet: React.FC<ModifyCharacterSheetProps> = ({
                     value={editForm.voice_prompt}
                     onChange={(e) => setEditForm({ ...editForm, voice_prompt: e.target.value })}
                 />
+                <p className="text-sm text-right text-gray-500">{editForm.voice_prompt?.length || 0}/200</p>
             </div>
         </div>
     );
