@@ -261,6 +261,12 @@ export const connectToUltravox = async ({
             if (isBinary) {
                 uvAudioChunks++;
                 uvAudioBytes += data.length;
+
+                // Update data activity every 50 chunks (~1 second of audio)
+                if (uvAudioChunks % 50 === 0) {
+                    sessionManager.updateDataActivity(deviceId);
+                }
+
                 if (uvAudioChunks % 50 === 1) {
                     console.log(`[UV] Ultravox audio: chunk #${uvAudioChunks}, size=${data.length}B, total=${uvAudioBytes}B`);
                 }
@@ -416,6 +422,11 @@ export const connectToUltravox = async ({
             if (isSessionActive && uvWs?.readyState === WebSocket.OPEN) {
                 audioPacketCount++;
                 totalAudioBytes += (data as Buffer).length;
+
+                // Update data activity every 50 packets (~1 second of audio)
+                if (audioPacketCount % 50 === 0) {
+                    sessionManager.updateDataActivity(deviceId);
+                }
 
                 // Decode Opus to PCM (16kHz) before forwarding to Ultravox
                 try {

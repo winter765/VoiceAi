@@ -11,8 +11,10 @@ import { WebSocket } from "npm:ws";
 
 // 会话最大时长：30 分钟
 const SESSION_MAX_DURATION_MS = 30 * 60 * 1000;
-// 超时检查间隔：1 分钟
-const TIMEOUT_CHECK_INTERVAL_MS = 60 * 1000;
+// 数据空闲超时：2 分钟
+const DATA_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
+// 超时检查间隔：30 秒
+const TIMEOUT_CHECK_INTERVAL_MS = 30 * 1000;
 
 export interface Session {
     deviceId: string;
@@ -20,7 +22,8 @@ export interface Session {
     ws: WebSocket;           // ESP32 WebSocket
     uvWs: WebSocket | null;  // Ultravox WebSocket
     createdAt: Date;
-    lastActivity: Date;
+    lastActivity: Date;      // 最后心跳时间
+    lastDataActivity: Date;  // 最后数据交流时间
     cleanup: () => void;     // 清理函数，由 handler 提供
 }
 
@@ -29,7 +32,9 @@ export interface SessionInfo {
     callId: string | null;
     createdAt: string;
     lastActivity: string;
+    lastDataActivity: string;
     durationMs: number;
+    dataIdleMs: number;
     hasUltravoxConnection: boolean;
 }
 
@@ -41,7 +46,7 @@ class SessionManager {
      * 注册新会话
      * 如果该设备已有旧会话，先关闭旧会话
      */
-    register(deviceId: string, session: Omit<Session, 'createdAt' | 'lastActivity'>): void {
+    register(deviceId: string, session: Omit<Session, 'createdAt' | 'lastActivity' | 'lastDataActivity'>): void {
         // 检查是否有旧会话
         const existing = this.sessions.get(deviceId);
         if (existing) {
@@ -49,10 +54,12 @@ class SessionManager {
             this.forceClose(deviceId);
         }
 
+        const now = new Date();
         const fullSession: Session = {
             ...session,
-            createdAt: new Date(),
-            lastActivity: new Date(),
+            createdAt: now,
+            lastActivity: now,
+            lastDataActivity: now,
         };
 
         this.sessions.set(deviceId, fullSession);
@@ -85,7 +92,9 @@ class SessionManager {
             callId: session.callId,
             createdAt: session.createdAt.toISOString(),
             lastActivity: session.lastActivity.toISOString(),
+            lastDataActivity: session.lastDataActivity.toISOString(),
             durationMs: now.getTime() - session.createdAt.getTime(),
+            dataIdleMs: now.getTime() - session.lastDataActivity.getTime(),
             hasUltravoxConnection: session.uvWs !== null && session.uvWs.readyState === WebSocket.OPEN,
         }));
     }
@@ -145,12 +154,22 @@ class SessionManager {
     }
 
     /**
-     * 更新最后活动时间
+     * 更新最后心跳时间
      */
     updateActivity(deviceId: string): void {
         const session = this.sessions.get(deviceId);
         if (session) {
             session.lastActivity = new Date();
+        }
+    }
+
+    /**
+     * 更新最后数据交流时间（音频收发时调用）
+     */
+    updateDataActivity(deviceId: string): void {
+        const session = this.sessions.get(deviceId);
+        if (session) {
+            session.lastDataActivity = new Date();
         }
     }
 
@@ -193,17 +212,27 @@ class SessionManager {
      */
     private checkTimeouts(): void {
         const now = Date.now();
-        const expiredDevices: string[] = [];
+        const expiredDevices: { deviceId: string; reason: string }[] = [];
 
         for (const [deviceId, session] of this.sessions) {
             const durationMs = now - session.createdAt.getTime();
+            const dataIdleMs = now - session.lastDataActivity.getTime();
+
+            // 检查数据空闲超时（2 分钟无数据交流）
+            if (dataIdleMs > DATA_IDLE_TIMEOUT_MS && session.uvWs !== null) {
+                console.log(`[SessionManager] Session for device ${deviceId} data idle for ${Math.round(dataIdleMs / 1000)}s, closing`);
+                expiredDevices.push({ deviceId, reason: "data_idle" });
+                continue;
+            }
+
+            // 检查会话最大时长（30 分钟）
             if (durationMs > SESSION_MAX_DURATION_MS) {
                 console.log(`[SessionManager] Session for device ${deviceId} exceeded max duration (${Math.round(durationMs / 1000 / 60)} minutes), closing`);
-                expiredDevices.push(deviceId);
+                expiredDevices.push({ deviceId, reason: "max_duration" });
             }
         }
 
-        for (const deviceId of expiredDevices) {
+        for (const { deviceId } of expiredDevices) {
             this.forceClose(deviceId);
         }
 
