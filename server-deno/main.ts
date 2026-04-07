@@ -222,6 +222,9 @@ server.on("upgrade", async (req, socket, head) => {
     });
 });
 
+// 启动会话超时检查器
+sessionManager.startTimeoutChecker();
+
 if (isDev) { // RUN WITH: deno run -A --env-file=.env main.ts
     const HOST = Deno.env.get("HOST") || "0.0.0.0";
     const PORT = Deno.env.get("PORT") || "8000";

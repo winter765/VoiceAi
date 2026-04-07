@@ -9,6 +9,11 @@
 
 import { WebSocket } from "npm:ws";
 
+// 会话最大时长：30 分钟
+const SESSION_MAX_DURATION_MS = 30 * 60 * 1000;
+// 超时检查间隔：1 分钟
+const TIMEOUT_CHECK_INTERVAL_MS = 60 * 1000;
+
 export interface Session {
     deviceId: string;
     callId: string | null;
@@ -30,6 +35,7 @@ export interface SessionInfo {
 
 class SessionManager {
     private sessions: Map<string, Session> = new Map();
+    private timeoutChecker: ReturnType<typeof setInterval> | null = null;
 
     /**
      * 注册新会话
@@ -153,6 +159,57 @@ class SessionManager {
      */
     get count(): number {
         return this.sessions.size;
+    }
+
+    /**
+     * 启动超时检查器
+     * 定期检查并关闭超过最大时长的会话
+     */
+    startTimeoutChecker(): void {
+        if (this.timeoutChecker) {
+            return; // 已经在运行
+        }
+
+        console.log(`[SessionManager] Starting timeout checker (max duration: ${SESSION_MAX_DURATION_MS / 1000 / 60} minutes)`);
+
+        this.timeoutChecker = setInterval(() => {
+            this.checkTimeouts();
+        }, TIMEOUT_CHECK_INTERVAL_MS);
+    }
+
+    /**
+     * 停止超时检查器
+     */
+    stopTimeoutChecker(): void {
+        if (this.timeoutChecker) {
+            clearInterval(this.timeoutChecker);
+            this.timeoutChecker = null;
+            console.log("[SessionManager] Timeout checker stopped");
+        }
+    }
+
+    /**
+     * 检查并关闭超时会话
+     */
+    private checkTimeouts(): void {
+        const now = Date.now();
+        const expiredDevices: string[] = [];
+
+        for (const [deviceId, session] of this.sessions) {
+            const durationMs = now - session.createdAt.getTime();
+            if (durationMs > SESSION_MAX_DURATION_MS) {
+                console.log(`[SessionManager] Session for device ${deviceId} exceeded max duration (${Math.round(durationMs / 1000 / 60)} minutes), closing`);
+                expiredDevices.push(deviceId);
+            }
+        }
+
+        for (const deviceId of expiredDevices) {
+            this.forceClose(deviceId);
+        }
+
+        if (expiredDevices.length > 0) {
+            console.log(`[SessionManager] Closed ${expiredDevices.length} expired sessions`);
+        }
     }
 }
 
