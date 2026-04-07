@@ -30,7 +30,7 @@ const formSchema = z.object({
   provider: z.enum(["ultravox"]),
   title: z.string().min(2, "Minimum 2 characters").max(50, "Maximum 50 characters"),
   description: z.string().min(50, "Minimum 50 characters").max(200, "Maximum 200 characters"),
-  prompt: z.string().min(100, "Minimum 100 characters").max(1000, "Maximum 1000 characters"),
+  prompt: z.string().min(100, "Minimum 100 characters").max(3000, "Maximum 3000 characters"),
   firstMessagePrompt: z.string().min(50, "Minimum 50 characters").max(150, "Maximum 150 characters"),
   voice: z.string().min(1, "Voice selection is required"),
   voiceCharacteristics: z.object({
@@ -468,7 +468,7 @@ const SettingsDashboard: React.FC<SettingsDashboardProps> = ({
                 <span className={formErrors.prompt ? "text-red-500" : "text-gray-500"}>
                   {formErrors.prompt}
                 </span>
-                <span className="text-gray-500">{formData.prompt.length}/1000</span>
+                <span className="text-gray-500">{formData.prompt.length}/3000</span>
               </p>
             </div>
             <div className="space-y-2">
