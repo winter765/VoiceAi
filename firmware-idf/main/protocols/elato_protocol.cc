@@ -4,12 +4,16 @@
 #include "application.h"
 #include "settings.h"
 #include "audio_service.h"
+#include "timer_manager.h"
 
 #include <cstring>
 #include <cJSON.h>
 #include <esp_log.h>
 #include <wifi_manager.h>
 #include "assets/lang_config.h"
+
+// Base64 decoding helper
+#include <mbedtls/base64.h>
 
 #define TAG "ElatoProtocol"
 
@@ -298,6 +302,121 @@ void ElatoProtocol::ParseServerMessage(const cJSON* root) {
         cJSON_AddStringToObject(tts_msg, "state", "stop");
         on_incoming_json_(tts_msg);
         cJSON_Delete(tts_msg);
+    }
+    // Chef AI: Timer messages
+    else if (strcmp(msg_str, "TIMER.SET") == 0) {
+        ParseTimerSetMessage(root);
+    } else if (strcmp(msg_str, "TIMER.CANCEL") == 0) {
+        ParseTimerCancelMessage(root);
+    } else if (strcmp(msg_str, "TIMER.AUDIO") == 0) {
+        ParseTimerAudioMessage(root);
+    }
+    // Chef AI: Recipe session messages
+    else if (strcmp(msg_str, "RECIPE.SESSION") == 0) {
+        ParseRecipeSessionMessage(root);
+    }
+}
+
+void ElatoProtocol::ParseTimerSetMessage(const cJSON* root) {
+    auto timer_name = cJSON_GetObjectItem(root, "timer_name");
+    auto duration = cJSON_GetObjectItem(root, "duration_seconds");
+    auto reminder = cJSON_GetObjectItem(root, "reminder_phrase");
+
+    if (!cJSON_IsString(timer_name) || !cJSON_IsNumber(duration)) {
+        ESP_LOGE(TAG, "Invalid TIMER.SET message");
+        return;
+    }
+
+    const char* name = timer_name->valuestring;
+    uint32_t seconds = duration->valueint;
+    const char* phrase = cJSON_IsString(reminder) ? reminder->valuestring : "Time's up!";
+
+    auto& timerMgr = TimerManager::GetInstance();
+    if (timerMgr.SetTimer(name, seconds, phrase)) {
+        ESP_LOGI(TAG, "Timer set: %s for %lu seconds", name, (unsigned long)seconds);
+    } else {
+        ESP_LOGE(TAG, "Failed to set timer: %s", name);
+    }
+}
+
+void ElatoProtocol::ParseTimerCancelMessage(const cJSON* root) {
+    auto timer_name = cJSON_GetObjectItem(root, "timer_name");
+    if (!cJSON_IsString(timer_name)) {
+        ESP_LOGE(TAG, "Invalid TIMER.CANCEL message");
+        return;
+    }
+
+    auto& timerMgr = TimerManager::GetInstance();
+    if (timerMgr.CancelTimer(timer_name->valuestring)) {
+        ESP_LOGI(TAG, "Timer cancelled: %s", timer_name->valuestring);
+    }
+}
+
+void ElatoProtocol::ParseTimerAudioMessage(const cJSON* root) {
+    auto timer_name = cJSON_GetObjectItem(root, "timer_name");
+    auto audio_base64 = cJSON_GetObjectItem(root, "audio_base64");
+    auto audio_size = cJSON_GetObjectItem(root, "audio_size");
+
+    if (!cJSON_IsString(timer_name) || !cJSON_IsString(audio_base64)) {
+        ESP_LOGE(TAG, "Invalid TIMER.AUDIO message");
+        return;
+    }
+
+    // Decode base64 audio
+    const char* b64_data = audio_base64->valuestring;
+    size_t b64_len = strlen(b64_data);
+    size_t decoded_len = 0;
+
+    // Calculate required buffer size
+    size_t max_decoded_len = (b64_len * 3) / 4 + 4;
+    uint8_t* decoded_audio = (uint8_t*)malloc(max_decoded_len);
+    if (!decoded_audio) {
+        ESP_LOGE(TAG, "Failed to allocate memory for audio decode");
+        return;
+    }
+
+    int ret = mbedtls_base64_decode(decoded_audio, max_decoded_len, &decoded_len,
+                                     (const unsigned char*)b64_data, b64_len);
+    if (ret != 0) {
+        ESP_LOGE(TAG, "Base64 decode failed: %d", ret);
+        free(decoded_audio);
+        return;
+    }
+
+    // Set audio on timer
+    auto& timerMgr = TimerManager::GetInstance();
+    if (timerMgr.SetTimerAudio(timer_name->valuestring, decoded_audio, decoded_len)) {
+        ESP_LOGI(TAG, "Timer audio set: %s (%zu bytes)", timer_name->valuestring, decoded_len);
+    }
+
+    free(decoded_audio);
+}
+
+void ElatoProtocol::ParseRecipeSessionMessage(const cJSON* root) {
+    auto recipe_name = cJSON_GetObjectItem(root, "recipe_name");
+    auto total_steps = cJSON_GetObjectItem(root, "total_steps");
+    auto current_step = cJSON_GetObjectItem(root, "current_step");
+
+    if (!cJSON_IsString(recipe_name) || !cJSON_IsNumber(total_steps)) {
+        ESP_LOGE(TAG, "Invalid RECIPE.SESSION message");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Recipe session: %s, step %d/%d",
+             recipe_name->valuestring,
+             cJSON_IsNumber(current_step) ? current_step->valueint : 1,
+             total_steps->valueint);
+
+    // Forward to application for display
+    if (on_incoming_json_ != nullptr) {
+        cJSON* recipe_msg = cJSON_CreateObject();
+        cJSON_AddStringToObject(recipe_msg, "type", "recipe");
+        cJSON_AddStringToObject(recipe_msg, "recipe_name", recipe_name->valuestring);
+        cJSON_AddNumberToObject(recipe_msg, "total_steps", total_steps->valueint);
+        cJSON_AddNumberToObject(recipe_msg, "current_step",
+                                cJSON_IsNumber(current_step) ? current_step->valueint : 1);
+        on_incoming_json_(recipe_msg);
+        cJSON_Delete(recipe_msg);
     }
 }
 

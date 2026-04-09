@@ -1,5 +1,7 @@
 import { createClient, SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { decryptSecret } from "./utils.ts";
+import { CHEF_PERSONALITY_KEY, getChefSystemPrompt, getChefFirstMessage } from "./prompts/chef.ts";
+import { getRecipeSession, getActiveTimers } from "./models/ultravox.ts";
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
 const supabaseKey = Deno.env.get("SUPABASE_KEY")!;
@@ -160,6 +162,12 @@ export const createFirstMessage = (
 ): string => {
     const { timestamp, user } = payload;
 
+    // Check for Chef mode
+    const personalityKey = user.personality?.key;
+    if (personalityKey === CHEF_PERSONALITY_KEY) {
+        return getChefFirstMessage(user.supervisee_name);
+    }
+
     const firstMessagePrompt = user.personality?.first_message_prompt
         ? `Always start the conversation following these instructions from the user: ${user.personality?.first_message_prompt}`
         : "Say hello to the user";
@@ -174,6 +182,27 @@ export const createSystemPrompt = (
     const { user, timestamp } = payload;
     const chatHistoryString = composeChatHistory(chatHistory);
     console.log("chatHistoryString", chatHistoryString);
+
+    // Check for Chef mode
+    const personalityKey = user.personality?.key;
+    if (personalityKey === CHEF_PERSONALITY_KEY) {
+        const deviceId = user.device?.mac_address || user.device_id || "unknown";
+        const activeRecipe = getRecipeSession(deviceId);
+        const activeTimers = getActiveTimers(deviceId);
+
+        return getChefSystemPrompt({
+            chatHistory: chatHistoryString,
+            timestamp,
+            language: user.language?.name || "English",
+            activeRecipe: activeRecipe ? {
+                name: activeRecipe.recipeName,
+                currentStep: activeRecipe.currentStep,
+                totalSteps: activeRecipe.steps.length,
+            } : null,
+            activeTimers,
+        });
+    }
+
     const commonPrompt = getCommonPromptTemplate(
         chatHistoryString,
         user,

@@ -41,6 +41,12 @@ private:
     std::string GetHelloMessage();
     void ParseAuthMessage(const cJSON* root);
     void ParseServerMessage(const cJSON* root);
+
+    // Chef AI: Timer and Recipe message handlers
+    void ParseTimerSetMessage(const cJSON* root);
+    void ParseTimerCancelMessage(const cJSON* root);
+    void ParseTimerAudioMessage(const cJSON* root);
+    void ParseRecipeSessionMessage(const cJSON* root);
 };
 
 #endif // ELATO_PROTOCOL_H

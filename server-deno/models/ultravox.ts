@@ -5,6 +5,260 @@ import { WebSocket } from "npm:ws";
 import { addConversation, getDeviceInfo } from "../supabase.ts";
 import { createOpusPacketizer, createOpusDecoder, isDev, ultravoxApiKey } from "../utils.ts";
 import { sessionManager } from "../session-manager.ts";
+import { CHEF_PERSONALITY_KEY, chefTools } from "../prompts/chef.ts";
+import { getOrGenerateReminderAudio } from "../services/tts.ts";
+
+// In-memory storage for active timers and recipe sessions (per device)
+// In production, consider using Redis or database for persistence
+const deviceTimers = new Map<string, Map<string, {
+    name: string;
+    durationSeconds: number;
+    reminderPhrase: string;
+    startTime: number;
+}>>();
+
+// Pending audio generation for timers (to send after TTS completes)
+const pendingTimerAudio = new Map<string, {
+    deviceId: string;
+    timerName: string;
+    espWs: WebSocket;
+}>();
+
+/**
+ * Generate TTS audio for timer reminder and send to ESP32
+ * Runs asynchronously to not block the main flow
+ */
+async function generateAndSendTimerAudio(
+    espWs: WebSocket,
+    timerName: string,
+    reminderPhrase: string,
+    deviceId: string
+): Promise<void> {
+    try {
+        console.log(`[CHEF] Generating TTS audio for timer "${timerName}": "${reminderPhrase}"`);
+
+        // Generate TTS audio (or get from cache)
+        const opusAudio = await getOrGenerateReminderAudio(timerName, reminderPhrase);
+
+        // Send audio to ESP32
+        if (espWs.readyState === WebSocket.OPEN) {
+            espWs.send(JSON.stringify({
+                type: "server",
+                msg: "TIMER.AUDIO",
+                timer_name: timerName,
+                audio_base64: opusAudio.toString("base64"),
+                audio_size: opusAudio.length,
+            }));
+
+            console.log(`[CHEF] Timer audio sent for "${timerName}": ${opusAudio.length} bytes`);
+        } else {
+            console.log(`[CHEF] ESP32 disconnected, cannot send timer audio for "${timerName}"`);
+        }
+    } catch (err) {
+        console.error(`[CHEF] Failed to generate timer audio for "${timerName}":`, err);
+        // Timer will still work, just without custom reminder audio
+        // ESP32 should have a fallback beep/default sound
+    }
+}
+
+const deviceRecipeSessions = new Map<string, {
+    recipeName: string;
+    steps: string[];
+    currentStep: number;
+}>();
+
+/**
+ * Handle tool calls from Ultravox (Chef mode)
+ */
+function handleToolCall(
+    event: any,
+    uvWs: WebSocket,
+    espWs: WebSocket,
+    deviceId: string
+) {
+    const { toolName, invocationId, parameters } = event;
+
+    console.log(`[CHEF] Tool call: ${toolName}`, parameters);
+
+    let result: any = { success: true };
+
+    try {
+        switch (toolName) {
+            case "set_timer": {
+                const { timer_name, duration_seconds, reminder_phrase } = parameters;
+
+                // Initialize device timers if needed
+                if (!deviceTimers.has(deviceId)) {
+                    deviceTimers.set(deviceId, new Map());
+                }
+                const timers = deviceTimers.get(deviceId)!;
+
+                // Check max timers
+                if (timers.size >= 5) {
+                    result = { success: false, error: "Maximum 5 timers allowed" };
+                    break;
+                }
+
+                // Store timer info
+                timers.set(timer_name, {
+                    name: timer_name,
+                    durationSeconds: duration_seconds,
+                    reminderPhrase: reminder_phrase,
+                    startTime: Date.now(),
+                });
+
+                // Send initial timer command to ESP32 (without audio)
+                espWs.send(JSON.stringify({
+                    type: "server",
+                    msg: "TIMER.SET",
+                    timer_name,
+                    duration_seconds,
+                    reminder_phrase,
+                }));
+
+                // Generate TTS audio asynchronously and send to ESP32
+                // This runs in background so we don't block the tool response
+                generateAndSendTimerAudio(espWs, timer_name, reminder_phrase, deviceId);
+
+                console.log(`[CHEF] Timer set: ${timer_name} for ${duration_seconds}s`);
+                result = {
+                    success: true,
+                    message: `Timer "${timer_name}" set for ${Math.floor(duration_seconds / 60)} minutes ${duration_seconds % 60} seconds`
+                };
+                break;
+            }
+
+            case "cancel_timer": {
+                const { timer_name } = parameters;
+                const timers = deviceTimers.get(deviceId);
+
+                if (timers?.has(timer_name)) {
+                    timers.delete(timer_name);
+
+                    // Send cancel command to ESP32
+                    espWs.send(JSON.stringify({
+                        type: "server",
+                        msg: "TIMER.CANCEL",
+                        timer_name,
+                    }));
+
+                    console.log(`[CHEF] Timer cancelled: ${timer_name}`);
+                    result = { success: true, message: `Timer "${timer_name}" cancelled` };
+                } else {
+                    result = { success: false, error: `Timer "${timer_name}" not found` };
+                }
+                break;
+            }
+
+            case "list_timers": {
+                const timers = deviceTimers.get(deviceId);
+                const now = Date.now();
+
+                if (!timers || timers.size === 0) {
+                    result = { success: true, timers: [], message: "No active timers" };
+                } else {
+                    const timerList = Array.from(timers.values()).map(t => {
+                        const elapsed = Math.floor((now - t.startTime) / 1000);
+                        const remaining = Math.max(0, t.durationSeconds - elapsed);
+                        return {
+                            name: t.name,
+                            remaining_seconds: remaining,
+                            remaining_display: `${Math.floor(remaining / 60)}m ${remaining % 60}s`
+                        };
+                    });
+                    result = { success: true, timers: timerList };
+                }
+                break;
+            }
+
+            case "save_recipe_steps": {
+                const { recipe_name, steps } = parameters;
+
+                // Store recipe session
+                deviceRecipeSessions.set(deviceId, {
+                    recipeName: recipe_name,
+                    steps: steps,
+                    currentStep: 1,
+                });
+
+                // Send recipe session to ESP32 for local navigation
+                espWs.send(JSON.stringify({
+                    type: "server",
+                    msg: "RECIPE.SESSION",
+                    recipe_name,
+                    total_steps: steps.length,
+                    current_step: 1,
+                }));
+
+                console.log(`[CHEF] Recipe session saved: ${recipe_name} with ${steps.length} steps`);
+                result = {
+                    success: true,
+                    message: `Recipe "${recipe_name}" saved with ${steps.length} steps`
+                };
+                break;
+            }
+
+            default:
+                console.log(`[CHEF] Unknown tool: ${toolName}`);
+                result = { success: false, error: `Unknown tool: ${toolName}` };
+        }
+    } catch (err) {
+        console.error(`[CHEF] Tool error:`, err);
+        result = { success: false, error: String(err) };
+    }
+
+    // Send tool result back to Ultravox
+    if (uvWs.readyState === WebSocket.OPEN) {
+        uvWs.send(JSON.stringify({
+            type: "client_tool_result",
+            invocationId,
+            result: JSON.stringify(result),
+        }));
+        console.log(`[CHEF] Tool result sent for ${toolName}:`, result);
+    }
+}
+
+/**
+ * Get active recipe session for a device
+ */
+export function getRecipeSession(deviceId: string) {
+    return deviceRecipeSessions.get(deviceId) || null;
+}
+
+/**
+ * Update recipe step for a device
+ */
+export function updateRecipeStep(deviceId: string, step: number) {
+    const session = deviceRecipeSessions.get(deviceId);
+    if (session) {
+        session.currentStep = step;
+    }
+}
+
+/**
+ * Clear recipe session for a device
+ */
+export function clearRecipeSession(deviceId: string) {
+    deviceRecipeSessions.delete(deviceId);
+}
+
+/**
+ * Get active timers for a device
+ */
+export function getActiveTimers(deviceId: string) {
+    const timers = deviceTimers.get(deviceId);
+    if (!timers) return [];
+
+    const now = Date.now();
+    return Array.from(timers.values()).map(t => {
+        const elapsed = Math.floor((now - t.startTime) / 1000);
+        const remaining = Math.max(0, t.durationSeconds - elapsed);
+        return {
+            name: t.name,
+            remainingSeconds: remaining,
+        };
+    });
+}
 
 // Heartbeat configuration
 const HEARTBEAT_INTERVAL_MS = 30000;  // 30 seconds
@@ -19,11 +273,18 @@ interface UltravoxCallResponse {
     [key: string]: any;
 }
 
+interface CreateUltravoxCallOptions {
+    systemPrompt: string;
+    voice: string;
+    firstMessage: string;
+    tools?: any[];  // Ultravox tool definitions
+}
+
 async function createUltravoxCall(
-    systemPrompt: string,
-    voice: string,
-    firstMessage: string,
+    options: CreateUltravoxCallOptions
 ): Promise<UltravoxCallResponse> {
+    const { systemPrompt, voice, firstMessage, tools } = options;
+
     if (!ultravoxApiKey) {
         throw new Error("ULTRAVOX_API_KEY is not set");
     }
@@ -45,6 +306,12 @@ async function createUltravoxCall(
         body.initialMessages = [
             { role: "MESSAGE_ROLE_USER", text: firstMessage },
         ];
+    }
+
+    // Add tools if provided (for Chef mode, etc.)
+    if (tools && tools.length > 0) {
+        body.selectedTools = tools;
+        console.log(`[UV] Creating call with ${tools.length} tools`);
     }
 
     const response = await fetch(ULTRAVOX_API_URL, {
@@ -83,6 +350,14 @@ export const connectToUltravox = async ({
     // Get device ID (prefer MAC address, fallback to device_id)
     const deviceId = user.device?.mac_address || user.device_id || "unknown";
     console.log(`[UV] Device ID: ${deviceId}`);
+
+    // Check if this is Chef mode (by personality key)
+    const personalityKey = user.personality?.key;
+    const isChefMode = personalityKey === CHEF_PERSONALITY_KEY;
+    const tools = isChefMode ? chefTools : undefined;
+    if (isChefMode) {
+        console.log(`[UV] Chef mode enabled for device ${deviceId}`);
+    }
 
     // Pre-fetch device info at connection start to avoid latency during audio playback
     let cachedVolume = 100;
@@ -223,7 +498,12 @@ export const connectToUltravox = async ({
         console.log("[UV] START_SESSION: Creating Ultravox call...");
         let callData: UltravoxCallResponse;
         try {
-            callData = await createUltravoxCall(systemPrompt, voice, firstMessage);
+            callData = await createUltravoxCall({
+                systemPrompt,
+                voice,
+                firstMessage,
+                tools,
+            });
             console.log(`[UV] Ultravox call created: ${callData.callId}`);
         } catch (e) {
             console.error("[UV] Failed to create Ultravox call:", e);
@@ -350,6 +630,12 @@ export const connectToUltravox = async ({
                     case "user_speech_started":
                         console.log("[DEBUG] user_speech_started → sending AUDIO.COMMITTED to ESP32");
                         ws.send(JSON.stringify({ type: "server", msg: "AUDIO.COMMITTED" }));
+                        break;
+
+                    case "client_tool_invocation":
+                        // Handle tool calls from Ultravox (Chef mode timers, recipe steps, etc.)
+                        console.log("[UV] Tool invocation:", event.toolName, event.parameters);
+                        handleToolCall(event, newUvWs, ws, deviceId);
                         break;
 
                     case "error":

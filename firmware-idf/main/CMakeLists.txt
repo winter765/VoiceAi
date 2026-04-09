@@ -38,6 +38,7 @@ set(SOURCES "audio/audio_codec.cc"
             "settings.cc"
             "device_state_machine.cc"
             "assets.cc"
+            "timer_manager.cc"
             "main.cc"
             )
 
