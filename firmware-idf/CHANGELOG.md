@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.0.6] - 2026-04-09
+
+### 新增功能
+
+#### 口型控制 (MouthControl)
+- 新增 `mouth_control.cc/h` 模块
+- AI 说话时 GPIO 17 输出高电平，停止时输出低电平
+- 用于外接玩具动嘴动画控制
+- 通过设备状态机监听器自动触发
+
+#### 代码文档
+- 重写 `README.md`，完整的代码架构文档
+- 包含目录结构、模块详解、GPIO 分配、状态机说明等
+
+### 文件变更
+- `main/mouth_control.cc` - 口型控制实现
+- `main/mouth_control.h` - 口型控制头文件
+- `main/boards/bread-compact-wifi/config.h` - 添加 `MOUTH_GPIO` 定义
+- `main/boards/bread-compact-wifi/compact_wifi_board.cc` - 初始化 MouthControl
+- `main/application.h` - 添加 `GetStateMachine()` 方法
+- `main/CMakeLists.txt` - 添加 mouth_control.cc 源文件
+- `README.md` - 完整代码架构文档
+
+---
+
 ## [1.0.5] - 2026-04-03
 
 ### 公网域名配置

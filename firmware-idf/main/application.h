@@ -113,6 +113,7 @@ public:
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);
     AudioService& GetAudioService() { return audio_service_; }
+    DeviceStateMachine& GetStateMachine() { return state_machine_; }
     
     /**
      * Reset protocol resources (thread-safe)
