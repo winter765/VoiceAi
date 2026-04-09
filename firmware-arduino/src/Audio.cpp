@@ -103,8 +103,13 @@ void transitionToSpeaking() {
     Serial.printf("[SPK-TRANS] Start, state=%d\n", deviceState);
     vTaskDelay(50);
     i2sInputFlushScheduled = true;
+
     deviceState = SPEAKING;
     speakingStartTime = millis();
+
+    // webSocket.enableHeartbeat(30000, 15000, 3);
+
+    Serial.printf("[SPK-TRANS] Done, state=%d (SPEAKING=%d)\n", deviceState, SPEAKING);
 }
 
 // networkTask -> transitionToListening()
@@ -116,6 +121,10 @@ void transitionToListening() {
     i2sOutputFlushScheduled = true;
     clearAudioSendQueue();
     audioBuffer.reset();
+    micSendBufferFlushScheduled = true;  // Clear mic send buffer
+
+    Serial.println("Transitioned to listening mode");
+
     deviceState = LISTENING;
 }
 
@@ -385,6 +394,25 @@ void micTask(void *parameter) {
                         micOpusFramePos = 0;  // Reset for next frame
                     }
                 }
+
+                // 写入环形缓冲区，由 wsSendTask 负责发送
+                size_t sendBytes = samplesRead * sizeof(int16_t);
+
+                // 在第一个包的前4字节写入特殊标记 0xAA 0xBB 0xCC 0xDD
+                if (writeCount == 0) {
+                    mic_buf_16[0] = 0xBBAA;  // little-endian: AA BB
+                    mic_buf_16[1] = 0xDDCC;  // little-endian: CC DD
+                }
+
+                size_t written = micSendBuffer.writeArray((uint8_t*)mic_buf_16, sendBytes);
+                writeCount++;
+
+                if (writeCount <= 5) {
+                    uint8_t* bytes = (uint8_t*)mic_buf_16;
+                    Serial.printf("[MIC] Write #%d: %d bytes, first8=[%02x,%02x,%02x,%02x,%02x,%02x,%02x,%02x]\n",
+                        writeCount, written,
+                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]);
+                }
             }
 
             vTaskDelay(1);
@@ -650,6 +678,8 @@ void toggleChatState() {
 // networkTask: 只负责 webSocket.loop() 和状态管理
 // 音频发送已解耦到 wsSendTask
 void networkTask(void *parameter) {
+    Serial.println("===== [NETWORK] Task STARTED =====");
+
     // Create audio send queue
     audioSendQueue = xQueueCreate(AUDIO_SEND_QUEUE_SIZE, sizeof(AudioPacket));
     if (audioSendQueue == NULL) {

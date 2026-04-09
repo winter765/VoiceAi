@@ -723,6 +723,12 @@ export const connectToUltravox = async ({
                         console.log(`[DEBUG] ESP32 audio: packet #${audioPacketCount}, opus=${(data as Buffer).length}B, pcm=${pcmData.length}B, totalPcm=${decodedPcmBytes}B`);
                     }
 
+                    // Log first 5 packets with hex dump
+                    if (audioPacketCount <= 5) {
+                        const first8 = Array.from(pcmData.slice(0, 8)).map(b => '0x' + b.toString(16).padStart(2, '0')).join(',');
+                        console.log(`[AUDIO-IN] ESP32→UV: pkt#${audioPacketCount}, opus=${(data as Buffer).length}B, pcm=${pcmData.length}B, first8=[${first8}]`);
+                    }
+
                     uvWs.send(Buffer.from(pcmData));
 
                     if (isDev && connectionPcmFile) {
