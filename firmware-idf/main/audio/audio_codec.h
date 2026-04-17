@@ -38,6 +38,8 @@ public:
     inline float input_gain() const { return input_gain_; }
     inline bool input_enabled() const { return input_enabled_; }
     inline bool output_enabled() const { return output_enabled_; }
+    inline bool user_volume_override() const { return user_volume_override_; }
+    inline void SetUserVolumeOverride(bool override) { user_volume_override_ = override; }
 
 protected:
     i2s_chan_handle_t tx_handle_ = nullptr;
@@ -53,6 +55,7 @@ protected:
     int output_channels_ = 1;
     int output_volume_ = 70;
     float input_gain_ = 0.0;
+    bool user_volume_override_ = false;  // true if user adjusted volume locally
 
     virtual int Read(int16_t* dest, int samples) = 0;
     virtual int Write(const int16_t* data, int samples) = 0;

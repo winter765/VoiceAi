@@ -75,10 +75,15 @@ NoAudioCodecDuplex::NoAudioCodecDuplex(int input_sample_rate, int output_sample_
 }
 
 
-NoAudioCodecSimplex::NoAudioCodecSimplex(int input_sample_rate, int output_sample_rate, gpio_num_t spk_bclk, gpio_num_t spk_ws, gpio_num_t spk_dout, gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din) {
+NoAudioCodecSimplex::NoAudioCodecSimplex(int input_sample_rate, int output_sample_rate, gpio_num_t spk_bclk, gpio_num_t spk_ws, gpio_num_t spk_dout, gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din, bool input_reference) {
     duplex_ = false;
     input_sample_rate_ = input_sample_rate;
     output_sample_rate_ = output_sample_rate;
+    input_reference_ = input_reference;
+    input_channels_ = input_reference ? 2 : 1;
+    if (input_reference) {
+        ref_buffer_.resize(960 * 2);
+    }
 
     // Create a new channel for speaker
     i2s_chan_config_t chan_cfg = {
@@ -144,10 +149,15 @@ NoAudioCodecSimplex::NoAudioCodecSimplex(int input_sample_rate, int output_sampl
     ESP_LOGI(TAG, "Simplex channels created");
 }
 
-NoAudioCodecSimplex::NoAudioCodecSimplex(int input_sample_rate, int output_sample_rate, gpio_num_t spk_bclk, gpio_num_t spk_ws, gpio_num_t spk_dout, i2s_std_slot_mask_t spk_slot_mask, gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din, i2s_std_slot_mask_t mic_slot_mask){
+NoAudioCodecSimplex::NoAudioCodecSimplex(int input_sample_rate, int output_sample_rate, gpio_num_t spk_bclk, gpio_num_t spk_ws, gpio_num_t spk_dout, i2s_std_slot_mask_t spk_slot_mask, gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din, i2s_std_slot_mask_t mic_slot_mask, bool input_reference){
     duplex_ = false;
     input_sample_rate_ = input_sample_rate;
     output_sample_rate_ = output_sample_rate;
+    input_reference_ = input_reference;
+    input_channels_ = input_reference ? 2 : 1;
+    if (input_reference) {
+        ref_buffer_.resize(960 * 2);
+    }
 
     // Create a new channel for speaker
     i2s_chan_config_t chan_cfg = {
@@ -232,6 +242,15 @@ int NoAudioCodec::Write(const int16_t* data, int samples) {
         }
     }
 
+    // Cache playback data for AEC reference
+    if (input_reference_ && !ref_buffer_.empty()) {
+        size_t buffer_size = ref_buffer_.size();
+        for (int i = 0; i < samples; i++) {
+            ref_buffer_[ref_write_pos_] = data[i];
+            ref_write_pos_ = (ref_write_pos_ + 1) % buffer_size;
+        }
+    }
+
     size_t bytes_written;
     ESP_ERROR_CHECK(i2s_channel_write(tx_handle_, buffer.data(), samples * sizeof(int32_t), &bytes_written, portMAX_DELAY));
     return bytes_written / sizeof(int32_t);
@@ -241,17 +260,34 @@ int NoAudioCodec::Read(int16_t* dest, int samples) {
     size_t bytes_read;
     constexpr TickType_t kReadTimeoutTicks = pdMS_TO_TICKS(200);
 
-    std::vector<int32_t> bit32_buffer(samples);
-    if (i2s_channel_read(rx_handle_, bit32_buffer.data(), samples * sizeof(int32_t), &bytes_read, kReadTimeoutTicks) != ESP_OK) {
+    // When input_reference_ is enabled, `samples` is the total buffer size (mono * 2).
+    // We need to read samples/2 mono mic samples and interleave with reference data.
+    int mic_samples = input_reference_ ? samples / 2 : samples;
+
+    std::vector<int32_t> bit32_buffer(mic_samples);
+    if (i2s_channel_read(rx_handle_, bit32_buffer.data(), mic_samples * sizeof(int32_t), &bytes_read, kReadTimeoutTicks) != ESP_OK) {
         return 0;
     }
 
-    samples = bytes_read / sizeof(int32_t);
-    for (int i = 0; i < samples; i++) {
-        int32_t value = bit32_buffer[i] >> 12;
-        dest[i] = (value > INT16_MAX) ? INT16_MAX : (value < -INT16_MAX) ? -INT16_MAX : (int16_t)value;
+    mic_samples = bytes_read / sizeof(int32_t);
+
+    if (input_reference_ && !ref_buffer_.empty()) {
+        // Interleave mic data with reference data
+        size_t buffer_size = ref_buffer_.size();
+        for (int i = 0; i < mic_samples; i++) {
+            int32_t mic_value = bit32_buffer[i] >> 12;
+            dest[i * 2] = (mic_value > INT16_MAX) ? INT16_MAX : (mic_value < -INT16_MAX) ? -INT16_MAX : (int16_t)mic_value;
+            dest[i * 2 + 1] = ref_buffer_[ref_read_pos_];
+            ref_read_pos_ = (ref_read_pos_ + 1) % buffer_size;
+        }
+        return mic_samples * 2;
+    } else {
+        for (int i = 0; i < mic_samples; i++) {
+            int32_t value = bit32_buffer[i] >> 12;
+            dest[i] = (value > INT16_MAX) ? INT16_MAX : (value < -INT16_MAX) ? -INT16_MAX : (int16_t)value;
+        }
+        return mic_samples;
     }
-    return samples;
 }
 
 void NoAudioCodec::EnableInput(bool enable) {

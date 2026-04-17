@@ -10,6 +10,7 @@
 #include "mcp_server.h"
 #include "assets.h"
 #include "settings.h"
+#include "timer_manager.h"
 
 #include <cstring>
 #include <esp_log.h>
@@ -178,6 +179,37 @@ void Application::Initialize() {
 
     // Update the status bar immediately to show the network state
     display->UpdateStatusBar(true);
+
+    // Initialize Timer Manager for Chef AI timers
+    auto& timerMgr = TimerManager::GetInstance();
+    timerMgr.Initialize([this](const Timer& timer) {
+        ESP_LOGI(TAG, "Timer expired: %s - %s", timer.name, timer.reminder_phrase);
+
+        // Copy audio data before scheduling (timer may be freed after callback returns)
+        std::vector<uint8_t> audio_copy;
+        if (timer.reminder_audio && timer.reminder_audio_size > 0) {
+            audio_copy.assign(timer.reminder_audio, timer.reminder_audio + timer.reminder_audio_size);
+        }
+
+        Schedule([this, name = std::string(timer.name), phrase = std::string(timer.reminder_phrase),
+                  audio = std::move(audio_copy)]() {
+            // Show notification on display
+            auto display = Board::GetInstance().GetDisplay();
+            display->ShowNotification(phrase.c_str());
+
+            // Play saved AI voice if available, otherwise play default sound
+            if (!audio.empty()) {
+                ESP_LOGI(TAG, "Playing saved AI voice for timer: %s (%zu bytes)", name.c_str(), audio.size());
+                audio_service_.PlayOpusData(audio.data(), audio.size());
+            } else {
+                ESP_LOGI(TAG, "No saved audio, playing default sound for timer: %s", name.c_str());
+                audio_service_.PlaySound(Lang::Sounds::OGG_VIBRATION);
+            }
+
+            // Auto-acknowledge the timer after playing
+            TimerManager::GetInstance().AcknowledgeTimer(name.c_str());
+        });
+    });
 }
 
 void Application::Run() {
@@ -272,7 +304,10 @@ void Application::Run() {
             clock_ticks_++;
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
-        
+
+            // Update timers (check for expired timers)
+            TimerManager::GetInstance().Update();
+
             // Print debug info every 10 seconds
             if (clock_ticks_ % 10 == 0) {
                 SystemInfo::PrintHeapStats();
@@ -615,6 +650,10 @@ void Application::InitializeProtocol() {
                         if (listening_mode_ == kListeningModeManualStop) {
                             SetDeviceState(kDeviceStateIdle);
                         } else {
+                            // Add delay to let audio buffer drain and echo settle
+                            // This prevents the mic from picking up speaker output
+                            ESP_LOGI(TAG, "TTS stop: waiting for audio to settle before listening");
+                            vTaskDelay(pdMS_TO_TICKS(400));
                             SetDeviceState(kDeviceStateListening);
                         }
                     }

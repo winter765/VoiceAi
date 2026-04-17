@@ -666,6 +666,44 @@ void AudioService::PlaySound(const std::string_view& ogg) {
     demuxer->Process(buf, size);
 }
 
+void AudioService::PlayOpusData(const uint8_t* data, size_t size, int sample_rate, int frame_duration) {
+    if (data == nullptr || size == 0) {
+        return;
+    }
+
+    // Enable audio output if needed
+    if (!codec_->output_enabled()) {
+        codec_->EnableOutput(true);
+    }
+
+    // Parse Opus packets with 2-byte length prefix (little-endian)
+    size_t offset = 0;
+    int packet_count = 0;
+    while (offset + 2 <= size) {
+        // Read packet length (little-endian)
+        uint16_t packet_len = data[offset] | (data[offset + 1] << 8);
+        offset += 2;
+
+        if (packet_len == 0 || offset + packet_len > size) {
+            ESP_LOGW("AudioService", "Invalid Opus packet at offset %zu, len=%u", offset - 2, packet_len);
+            break;
+        }
+
+        // Create AudioStreamPacket and push to decode queue
+        auto packet = std::make_unique<AudioStreamPacket>();
+        packet->sample_rate = sample_rate;
+        packet->frame_duration = frame_duration;
+        packet->payload.resize(packet_len);
+        std::memcpy(packet->payload.data(), data + offset, packet_len);
+        PushPacketToDecodeQueue(std::move(packet), true);
+
+        offset += packet_len;
+        packet_count++;
+    }
+
+    ESP_LOGI("AudioService", "PlayOpusData: %d packets from %zu bytes", packet_count, size);
+}
+
 bool AudioService::IsIdle() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     return audio_encode_queue_.empty() && audio_decode_queue_.empty() && audio_playback_queue_.empty() && audio_testing_queue_.empty();

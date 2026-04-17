@@ -6,10 +6,15 @@
 #include <driver/gpio.h>
 #include <driver/i2s_pdm.h>
 #include <mutex>
+#include <vector>
 
 class NoAudioCodec : public AudioCodec {
 protected:
     std::mutex data_if_mutex_;
+    // Software reference buffer for AEC (echo cancellation)
+    std::vector<int16_t> ref_buffer_;
+    size_t ref_read_pos_ = 0;
+    size_t ref_write_pos_ = 0;
 
     virtual int Write(const int16_t* data, int samples) override;
     virtual int Read(int16_t* dest, int samples) override;
@@ -27,8 +32,8 @@ public:
 
 class NoAudioCodecSimplex : public NoAudioCodec {
 public:
-    NoAudioCodecSimplex(int input_sample_rate, int output_sample_rate, gpio_num_t spk_bclk, gpio_num_t spk_ws, gpio_num_t spk_dout, gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din);
-    NoAudioCodecSimplex(int input_sample_rate, int output_sample_rate, gpio_num_t spk_bclk, gpio_num_t spk_ws, gpio_num_t spk_dout, i2s_std_slot_mask_t spk_slot_mask, gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din, i2s_std_slot_mask_t mic_slot_mask);
+    NoAudioCodecSimplex(int input_sample_rate, int output_sample_rate, gpio_num_t spk_bclk, gpio_num_t spk_ws, gpio_num_t spk_dout, gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din, bool input_reference = false);
+    NoAudioCodecSimplex(int input_sample_rate, int output_sample_rate, gpio_num_t spk_bclk, gpio_num_t spk_ws, gpio_num_t spk_dout, i2s_std_slot_mask_t spk_slot_mask, gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din, i2s_std_slot_mask_t mic_slot_mask, bool input_reference = false);
 };
 
 class NoAudioCodecSimplexPdm : public NoAudioCodec {

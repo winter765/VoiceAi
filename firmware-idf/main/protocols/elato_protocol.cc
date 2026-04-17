@@ -197,10 +197,12 @@ void ElatoProtocol::ParseAuthMessage(const cJSON* root) {
     auto volume_control = cJSON_GetObjectItem(root, "volume_control");
     if (cJSON_IsNumber(volume_control)) {
         ESP_LOGI(TAG, "Volume control: %d", volume_control->valueint);
-        // Store or apply volume setting
+        // Store or apply volume setting (only if user hasn't adjusted locally)
         auto codec = Board::GetInstance().GetAudioCodec();
-        if (codec) {
+        if (codec && !codec->user_volume_override()) {
             codec->SetOutputVolume(volume_control->valueint);
+        } else if (codec) {
+            ESP_LOGI(TAG, "Skipping server volume, user override active");
         }
     }
 
@@ -253,11 +255,11 @@ void ElatoProtocol::ParseServerMessage(const cJSON* root) {
     } else if (strcmp(msg_str, "RESPONSE.COMPLETE") == 0 ||
                strcmp(msg_str, "RESPONSE.ERROR") == 0) {
         // Response finished -> tts stop
-        // Check for volume update first
+        // Check for volume update first (only if user hasn't adjusted locally)
         auto volume_control = cJSON_GetObjectItem(root, "volume_control");
         if (cJSON_IsNumber(volume_control)) {
             auto codec = Board::GetInstance().GetAudioCodec();
-            if (codec) {
+            if (codec && !codec->user_volume_override()) {
                 codec->SetOutputVolume(volume_control->valueint);
             }
         }

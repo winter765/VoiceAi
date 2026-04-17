@@ -156,11 +156,14 @@ private:
                 volume = 100;
             }
             codec->SetOutputVolume(volume);
+            codec->SetUserVolumeOverride(true);  // User adjusted, don't override from server
             GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
         });
 
         volume_up_button_.OnLongPress([this]() {
-            GetAudioCodec()->SetOutputVolume(100);
+            auto codec = GetAudioCodec();
+            codec->SetOutputVolume(100);
+            codec->SetUserVolumeOverride(true);
             GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
         });
 
@@ -171,11 +174,14 @@ private:
                 volume = 0;
             }
             codec->SetOutputVolume(volume);
+            codec->SetUserVolumeOverride(true);  // User adjusted, don't override from server
             GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
         });
 
         volume_down_button_.OnLongPress([this]() {
-            GetAudioCodec()->SetOutputVolume(0);
+            auto codec = GetAudioCodec();
+            codec->SetOutputVolume(0);
+            codec->SetUserVolumeOverride(true);
             GetDisplay()->ShowNotification(Lang::Strings::MUTED);
         });
     }
