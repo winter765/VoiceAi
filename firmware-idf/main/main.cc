@@ -6,10 +6,29 @@
 #include <esp_event.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <cstdlib>
+#include <ctime>
 
 #include "application.h"
 
 #define TAG "main"
+
+static void InitTimezone() {
+    // Try to read saved timezone from NVS
+    nvs_handle_t nvs_handle;
+    char tz_str[32] = "CST-8";  // Default to China Standard Time
+
+    if (nvs_open("system", NVS_READONLY, &nvs_handle) == ESP_OK) {
+        size_t len = sizeof(tz_str);
+        if (nvs_get_str(nvs_handle, "timezone", tz_str, &len) == ESP_OK) {
+            ESP_LOGI(TAG, "Loaded timezone from NVS: %s", tz_str);
+        }
+        nvs_close(nvs_handle);
+    }
+
+    setenv("TZ", tz_str, 1);
+    tzset();
+}
 
 extern "C" void app_main(void)
 {
@@ -21,6 +40,9 @@ extern "C" void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    // Initialize timezone from NVS or use default
+    InitTimezone();
 
     // Initialize and run the application
     auto& app = Application::GetInstance();

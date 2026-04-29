@@ -10,6 +10,7 @@
 #include <cJSON.h>
 #include <esp_log.h>
 #include <wifi_manager.h>
+#include <nvs_flash.h>
 #include "assets/lang_config.h"
 
 // Base64 decoding helper
@@ -317,6 +318,10 @@ void ElatoProtocol::ParseServerMessage(const cJSON* root) {
     else if (strcmp(msg_str, "RECIPE.SESSION") == 0) {
         ParseRecipeSessionMessage(root);
     }
+    // System settings
+    else if (strcmp(msg_str, "SYSTEM.SET_TIMEZONE") == 0) {
+        ParseSetTimezoneMessage(root);
+    }
 }
 
 void ElatoProtocol::ParseTimerSetMessage(const cJSON* root) {
@@ -419,6 +424,46 @@ void ElatoProtocol::ParseRecipeSessionMessage(const cJSON* root) {
                                 cJSON_IsNumber(current_step) ? current_step->valueint : 1);
         on_incoming_json_(recipe_msg);
         cJSON_Delete(recipe_msg);
+    }
+}
+
+void ElatoProtocol::ParseSetTimezoneMessage(const cJSON* root) {
+    auto offset_hours = cJSON_GetObjectItem(root, "offset_hours");
+
+    if (!cJSON_IsNumber(offset_hours)) {
+        ESP_LOGE(TAG, "Invalid SYSTEM.SET_TIMEZONE message");
+        return;
+    }
+
+    int offset = offset_hours->valueint;
+
+    // Validate range
+    if (offset < -12 || offset > 14) {
+        ESP_LOGE(TAG, "Invalid timezone offset: %d", offset);
+        return;
+    }
+
+    // Build POSIX timezone string (note: POSIX uses inverted sign)
+    // UTC+8 -> "UTC-8", UTC-5 -> "UTC5"
+    char tz_str[32];
+    if (offset >= 0) {
+        snprintf(tz_str, sizeof(tz_str), "UTC-%d", offset);
+    } else {
+        snprintf(tz_str, sizeof(tz_str), "UTC%d", -offset);
+    }
+
+    // Set timezone
+    setenv("TZ", tz_str, 1);
+    tzset();
+
+    // Save to NVS for persistence
+    nvs_handle_t nvs_handle;
+    if (nvs_open("system", NVS_READWRITE, &nvs_handle) == ESP_OK) {
+        nvs_set_str(nvs_handle, "timezone", tz_str);
+        nvs_commit(nvs_handle);
+        nvs_close(nvs_handle);
+    } else {
+        ESP_LOGW(TAG, "Failed to save timezone to NVS");
     }
 }
 

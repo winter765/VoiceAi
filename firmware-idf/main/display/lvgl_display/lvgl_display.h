@@ -29,11 +29,12 @@ protected:
     esp_pm_lock_handle_t pm_lock_ = nullptr;
     lv_display_t *display_ = nullptr;
 
-    lv_obj_t *network_label_ = nullptr;
-    lv_obj_t *status_label_ = nullptr;
+    lv_obj_t *time_label_ = nullptr;        // 左上角时间
+    lv_obj_t *network_label_ = nullptr;     // 右上角网络图标
+    lv_obj_t *status_label_ = nullptr;      // 中间设备状态
     lv_obj_t *notification_label_ = nullptr;
     lv_obj_t *mute_label_ = nullptr;
-    lv_obj_t *battery_label_ = nullptr;
+    lv_obj_t *battery_label_ = nullptr;     // 右上角电池图标
     lv_obj_t* low_battery_popup_ = nullptr;
     lv_obj_t* low_battery_label_ = nullptr;
     

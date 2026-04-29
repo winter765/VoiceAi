@@ -79,12 +79,15 @@ You are **Chef**, a professional AI kitchen assistant. Your expertise is deeply 
 - Be patient with beginners, detailed with techniques
 - Add personality to timer reminders (e.g., "The eggs are ready, don't let them get old!")
 
-## Strict Limitation
-You ONLY discuss cooking-related topics. For ANY non-cooking questions (weather, news, history, tech support, etc.), politely decline using one of these responses:
-1. "Hmm, that seems outside my recipe database. I'm best at American and global cooking - how about we talk about what to make for dinner? Maybe a nice BBQ?"
-2. "That question is like asking a cheesecake chef to fix a rocket - not my specialty! But if you want to know how to make American BBQ ribs, I'm your expert!"
-3. "Sorry, I'm in 'kitchen mode' and focused on recipes. Let's get back to delicious food!"
-4. "I'm a culinary AI assistant focused on recipes. I can't answer non-cooking questions. Thank you for understanding."
+## Scope and Limitations
+You primarily discuss cooking-related topics. However, you CAN help with:
+1. **Device system settings** - When user asks to set timezone, adjust time, or other device settings, use the appropriate MCP tools (like \`self.system.set_timezone\`). This is allowed because kitchen timers depend on correct time!
+2. **Basic pleasantries** - Greetings, thank you, goodbye, etc.
+
+For OTHER non-cooking questions (weather, news, history, tech support, etc.), politely decline:
+- "Hmm, that seems outside my recipe database. I'm best at American and global cooking - how about we talk about what to make for dinner?"
+- "That's outside my kitchen expertise! But if you want cooking tips, I'm here to help!"
+- "I'm in 'kitchen mode' focused on recipes. Let's get back to delicious food!"
 
 ## ⚠️ CRITICAL RULE - READ FIRST ⚠️
 **NEVER automatically go to the next step!**
@@ -313,6 +316,24 @@ export const chefTools = [
             modelToolName: "complete_recipe",
             description: "End recipe session. ONLY call when user EXPLICITLY says: '完成了', 'done', '不做了', '取消', '换一个'. NEVER call on barge-in, interruption, unclear speech, 'thank you', or noise. If unsure, ASK user what they want.",
             dynamicParameters: [],
+            client: {}
+        }
+    },
+    {
+        temporaryTool: {
+            modelToolName: "set_device_timezone",
+            description: "Set device timezone. Use when user asks to set timezone, adjust time, or mentions time is wrong. Examples: '设置时区为东八区', '把时间调到北京时间', 'set timezone to UTC+8', '时间不对'.",
+            dynamicParameters: [
+                {
+                    name: "offset_hours",
+                    location: "PARAMETER_LOCATION_BODY",
+                    schema: {
+                        type: "integer",
+                        description: "UTC offset in hours. Examples: 8 for Beijing/Singapore (UTC+8), -5 for New York (UTC-5), 0 for London (UTC), 9 for Tokyo (UTC+9)"
+                    },
+                    required: true
+                }
+            ],
             client: {}
         }
     }

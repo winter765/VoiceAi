@@ -14,6 +14,7 @@
 
 #include <cstring>
 #include <esp_log.h>
+#include <esp_app_desc.h>
 #include <cJSON.h>
 #include <driver/gpio.h>
 #include <arpa/inet.h>
@@ -84,8 +85,6 @@ void Application::Initialize() {
     // Setup the display
     auto display = board.GetDisplay();
     display->SetupUI();
-    // Print board name/version info
-    display->SetChatMessage("system", SystemInfo::GetUserAgent().c_str());
 
     // Setup the audio service
     auto codec = board.GetAudioCodec();
@@ -369,8 +368,8 @@ void Application::HandleActivationDoneEvent() {
     has_server_time_ = ota_->HasServerTime();
 
     auto display = Board::GetInstance().GetDisplay();
-    std::string message = std::string(Lang::Strings::VERSION) + ota_->GetCurrentVersion();
-    display->ShowNotification(message.c_str());
+    // std::string message = std::string(Lang::Strings::VERSION) + ota_->GetCurrentVersion();
+    // display->ShowNotification(message.c_str());
     display->SetChatMessage("system", "");
 
     // Release OTA object after activation is complete
@@ -723,6 +722,20 @@ void Application::InitializeProtocol() {
                 Alert(status->valuestring, message->valuestring, emotion->valuestring, Lang::Sounds::OGG_VIBRATION);
             } else {
                 ESP_LOGW(TAG, "Alert command requires status, message and emotion");
+            }
+        } else if (strcmp(type->valuestring, "recipe") == 0) {
+            // Chef AI: Recipe session info
+            auto recipe_name = cJSON_GetObjectItem(root, "recipe_name");
+            auto total_steps = cJSON_GetObjectItem(root, "total_steps");
+            auto current_step = cJSON_GetObjectItem(root, "current_step");
+            if (cJSON_IsString(recipe_name) && cJSON_IsNumber(total_steps)) {
+                int step = cJSON_IsNumber(current_step) ? current_step->valueint : 1;
+                Schedule([display,
+                          name = std::string(recipe_name->valuestring),
+                          step,
+                          total = total_steps->valueint]() {
+                    display->SetRecipeInfo(name.c_str(), step, total);
+                });
             }
 #if CONFIG_RECEIVE_CUSTOM_MESSAGE
         } else if (strcmp(type->valuestring, "custom") == 0) {

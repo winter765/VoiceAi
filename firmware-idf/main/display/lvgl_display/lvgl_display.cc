@@ -46,6 +46,9 @@ LvglDisplay::~LvglDisplay() {
         esp_timer_delete(notification_timer_);
     }
 
+    if (time_label_ != nullptr) {
+        lv_obj_del(time_label_);
+    }
     if (network_label_ != nullptr) {
         lv_obj_del(network_label_);
     }
@@ -132,20 +135,20 @@ void LvglDisplay::UpdateStatusBar(bool update_all) {
         }
     }
 
-    // Update time
-    if (app.GetDeviceState() == kDeviceStateIdle) {
-        if (last_status_update_time_ + std::chrono::seconds(10) < std::chrono::system_clock::now()) {
-            // Set status to clock "HH:MM"
-            time_t now = time(NULL);
-            struct tm* tm = localtime(&now);
-            // Check if the we have already set the time
-            if (tm->tm_year >= 2025 - 1900) {
-                char time_str[16];
-                strftime(time_str, sizeof(time_str), "%H:%M", tm);
-                SetStatus(time_str);
-            } else {
-                ESP_LOGW(TAG, "System time is not set, tm_year: %d", tm->tm_year);
-            }
+    // Update time label (左上角时间)
+    {
+        time_t now = time(NULL);
+        struct tm* tm = localtime(&now);
+        char time_str[16];
+        // 如果时间已同步（年份 >= 2024），显示实际时间；否则显示 "--:--"
+        if (tm->tm_year >= 2024 - 1900) {
+            strftime(time_str, sizeof(time_str), "%H:%M", tm);
+        } else {
+            strcpy(time_str, "--:--");
+        }
+        DisplayLockGuard lock(this);
+        if (time_label_ != nullptr) {
+            lv_label_set_text(time_label_, time_str);
         }
     }
 

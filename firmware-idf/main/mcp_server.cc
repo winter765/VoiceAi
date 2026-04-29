@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cstring>
 #include <esp_pthread.h>
+#include <cstdlib>
+#include <ctime>
 
 #include "application.h"
 #include "display.h"
@@ -52,15 +54,54 @@ void McpServer::AddCommonTools() {
             return board.GetDeviceStatusJson();
         });
 
-    AddTool("self.audio_speaker.set_volume", 
+    AddTool("self.audio_speaker.set_volume",
         "Set the volume of the audio speaker. If the current volume is unknown, you must call `self.get_device_status` tool first and then call this tool.",
         PropertyList({
             Property("volume", kPropertyTypeInteger, 0, 100)
-        }), 
+        }),
         [&board](const PropertyList& properties) -> ReturnValue {
             auto codec = board.GetAudioCodec();
             codec->SetOutputVolume(properties["volume"].value<int>());
             return true;
+        });
+
+    AddTool("self.system.set_timezone",
+        "设置设备时区。用户可以通过说\"设置时区为东八区\"或\"把时间调到北京时间\"来触发。\n"
+        "参数 offset_hours: 相对于 UTC 的小时偏移，例如：\n"
+        "  - 中国/北京/上海: 8\n"
+        "  - 日本/东京: 9\n"
+        "  - 美国东部: -5\n"
+        "  - 美国西部: -8\n"
+        "  - 英国/伦敦: 0\n"
+        "  - 德国/柏林: 1",
+        PropertyList({
+            Property("offset_hours", kPropertyTypeInteger, -12, 14)
+        }),
+        [](const PropertyList& properties) -> ReturnValue {
+            int offset = properties["offset_hours"].value<int>();
+            char tz_str[32];
+            // POSIX TZ format: sign is opposite (UTC+8 = "UTC-8")
+            if (offset >= 0) {
+                snprintf(tz_str, sizeof(tz_str), "UTC-%d", offset);
+            } else {
+                snprintf(tz_str, sizeof(tz_str), "UTC+%d", -offset);
+            }
+
+            setenv("TZ", tz_str, 1);
+            tzset();
+
+            // Save to NVS for persistence
+            Settings tz_settings("system", true);
+            tz_settings.SetString("timezone", tz_str);
+
+            // Return current time as confirmation
+            time_t now = time(NULL);
+            struct tm timeinfo;
+            localtime_r(&now, &timeinfo);
+            char time_str[64];
+            strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &timeinfo);
+
+            return std::string("时区已设置为 UTC") + (offset >= 0 ? "+" : "") + std::to_string(offset) + "，当前时间: " + time_str;
         });
     
     auto backlight = board.GetBacklight();

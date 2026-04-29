@@ -47,6 +47,9 @@ private:
     void ParseTimerCancelMessage(const cJSON* root);
     void ParseTimerAudioMessage(const cJSON* root);
     void ParseRecipeSessionMessage(const cJSON* root);
+
+    // System settings handlers
+    void ParseSetTimezoneMessage(const cJSON* root);
 };
 
 #endif // ELATO_PROTOCOL_H

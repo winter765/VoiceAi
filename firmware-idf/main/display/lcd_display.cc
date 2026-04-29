@@ -3,6 +3,7 @@
 #include "settings.h"
 #include "lvgl_theme.h"
 #include "assets/lang_config.h"
+#include "timer_manager.h"
 
 #include <vector>
 #include <algorithm>
@@ -296,9 +297,26 @@ LcdDisplay::~LcdDisplay() {
         esp_timer_stop(preview_timer_);
         esp_timer_delete(preview_timer_);
     }
+    if (chat_page_timer_ != nullptr) {
+        esp_timer_stop(chat_page_timer_);
+        esp_timer_delete(chat_page_timer_);
+    }
+    if (timer_update_timer_ != nullptr) {
+        esp_timer_stop(timer_update_timer_);
+        esp_timer_delete(timer_update_timer_);
+    }
+    if (timer_page_timer_ != nullptr) {
+        esp_timer_stop(timer_page_timer_);
+        esp_timer_delete(timer_page_timer_);
+    }
 
     if (preview_image_ != nullptr) {
         lv_obj_del(preview_image_);
+    }
+    if (chat_content_area_ != nullptr) {
+        lv_obj_del(chat_content_area_);
+        chat_message_label_ = nullptr;  // Already deleted with parent
+        chat_hint_label_ = nullptr;     // Already deleted with parent
     }
     if (chat_message_label_ != nullptr) {
         lv_obj_del(chat_message_label_);
@@ -852,11 +870,11 @@ void LcdDisplay::SetupUI() {
     lv_obj_align(preview_image_, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
 
-    /* Layer 1: Top bar - for status icons */
+    /* Layer 1: Top bar - 仿手机状态栏布局 */
     top_bar_ = lv_obj_create(screen);
     lv_obj_set_size(top_bar_, LV_HOR_RES, LV_SIZE_CONTENT);
     lv_obj_set_style_radius(top_bar_, 0, 0);
-    lv_obj_set_style_bg_opa(top_bar_, LV_OPA_50, 0);  // 50% opacity background
+    lv_obj_set_style_bg_opa(top_bar_, LV_OPA_50, 0);
     lv_obj_set_style_bg_color(top_bar_, lvgl_theme->background_color(), 0);
     lv_obj_set_style_border_width(top_bar_, 0, 0);
     lv_obj_set_style_pad_all(top_bar_, 0, 0);
@@ -869,25 +887,55 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_scrollbar_mode(top_bar_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_align(top_bar_, LV_ALIGN_TOP_MID, 0, 0);
 
-    // Left icon
-    network_label_ = lv_label_create(top_bar_);
-    lv_label_set_text(network_label_, "");
-    lv_obj_set_style_text_font(network_label_, icon_font, 0);
-    lv_obj_set_style_text_color(network_label_, lvgl_theme->text_color(), 0);
+    // 计算左右区域的固定宽度（保证中间居中）
+    int side_width = LV_HOR_RES / 4;  // 左右各占 1/4 宽度
 
-    // Right icons container
+    // 左上角：时间（固定宽度，左对齐）
+    lv_obj_t* left_container = lv_obj_create(top_bar_);
+    lv_obj_set_size(left_container, side_width, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(left_container, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(left_container, 0, 0);
+    lv_obj_set_style_pad_all(left_container, 0, 0);
+
+    time_label_ = lv_label_create(left_container);
+    lv_label_set_text(time_label_, "--:--");
+    lv_obj_set_style_text_font(time_label_, text_font, 0);
+    lv_obj_set_style_text_color(time_label_, lvgl_theme->text_color(), 0);
+    lv_obj_align(time_label_, LV_ALIGN_LEFT_MID, 0, 0);
+
+    // 中间：设备状态（flex grow 填充剩余空间，文字居中）
+    lv_obj_t* center_container = lv_obj_create(top_bar_);
+    lv_obj_set_flex_grow(center_container, 1);
+    lv_obj_set_height(center_container, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(center_container, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(center_container, 0, 0);
+    lv_obj_set_style_pad_all(center_container, 0, 0);
+
+    status_label_ = lv_label_create(center_container);
+    lv_obj_set_style_text_align(status_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(status_label_, lvgl_theme->text_color(), 0);
+    lv_label_set_text(status_label_, Lang::Strings::INITIALIZING);
+    lv_obj_center(status_label_);
+
+    // 右上角：网络 + 静音 + 电池（固定宽度，右对齐）
     lv_obj_t* right_icons = lv_obj_create(top_bar_);
-    lv_obj_set_size(right_icons, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_size(right_icons, side_width, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_opa(right_icons, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(right_icons, 0, 0);
     lv_obj_set_style_pad_all(right_icons, 0, 0);
     lv_obj_set_flex_flow(right_icons, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(right_icons, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
+    network_label_ = lv_label_create(right_icons);
+    lv_label_set_text(network_label_, "");
+    lv_obj_set_style_text_font(network_label_, icon_font, 0);
+    lv_obj_set_style_text_color(network_label_, lvgl_theme->text_color(), 0);
+
     mute_label_ = lv_label_create(right_icons);
     lv_label_set_text(mute_label_, "");
     lv_obj_set_style_text_font(mute_label_, icon_font, 0);
     lv_obj_set_style_text_color(mute_label_, lvgl_theme->text_color(), 0);
+    lv_obj_set_style_margin_left(mute_label_, lvgl_theme->spacing(2), 0);
 
     battery_label_ = lv_label_create(right_icons);
     lv_label_set_text(battery_label_, "");
@@ -895,90 +943,179 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_text_color(battery_label_, lvgl_theme->text_color(), 0);
     lv_obj_set_style_margin_left(battery_label_, lvgl_theme->spacing(2), 0);
 
-    /* Layer 2: Status bar - for center text labels */
+    /* Layer 2: Status bar - 用于通知显示（覆盖在 top_bar 上）*/
     status_bar_ = lv_obj_create(screen);
     lv_obj_set_size(status_bar_, LV_HOR_RES, LV_SIZE_CONTENT);
     lv_obj_set_style_radius(status_bar_, 0, 0);
-    lv_obj_set_style_bg_opa(status_bar_, LV_OPA_TRANSP, 0);  // Transparent background
+    lv_obj_set_style_bg_opa(status_bar_, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(status_bar_, 0, 0);
     lv_obj_set_style_pad_all(status_bar_, 0, 0);
     lv_obj_set_style_pad_top(status_bar_, lvgl_theme->spacing(2), 0);
     lv_obj_set_style_pad_bottom(status_bar_, lvgl_theme->spacing(2), 0);
     lv_obj_set_scrollbar_mode(status_bar_, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_set_style_layout(status_bar_, LV_LAYOUT_NONE, 0);  // Use absolute positioning
-    lv_obj_align(status_bar_, LV_ALIGN_TOP_MID, 0, 0);  // Overlap with top_bar_
+    lv_obj_set_style_layout(status_bar_, LV_LAYOUT_NONE, 0);
+    lv_obj_align(status_bar_, LV_ALIGN_TOP_MID, 0, 0);
 
     notification_label_ = lv_label_create(status_bar_);
-    lv_obj_set_width(notification_label_, LV_HOR_RES * 0.75);
+    lv_obj_set_width(notification_label_, LV_HOR_RES * 0.5);
     lv_obj_set_style_text_align(notification_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(notification_label_, lvgl_theme->text_color(), 0);
     lv_label_set_text(notification_label_, "");
     lv_obj_align(notification_label_, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
 
-    status_label_ = lv_label_create(status_bar_);
-    lv_obj_set_width(status_label_, LV_HOR_RES * 0.75);
-    lv_label_set_long_mode(status_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_obj_set_style_text_align(status_label_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(status_label_, lvgl_theme->text_color(), 0);
-    lv_label_set_text(status_label_, Lang::Strings::INITIALIZING);
-    lv_obj_align(status_label_, LV_ALIGN_CENTER, 0, 0);
+    /* Chef AI: Recipe progress bar (always visible, 2 rows) */
+    int top_bar_height = text_font->line_height + lvgl_theme->spacing(4);
+    int bar_height = text_font->line_height + lvgl_theme->spacing(4);
+    int recipe_bar_height = bar_height * 2;  // 2 rows for recipe
 
-#if CONFIG_USE_MULTILINE_CHAT_MESSAGE
-    /* Bottom bar - auto height, grows upward with wrapped text */
-    bottom_bar_ = lv_obj_create(screen);
-    lv_obj_set_width(bottom_bar_, LV_HOR_RES);
-    lv_obj_set_height(bottom_bar_, LV_SIZE_CONTENT);
-    lv_obj_set_style_radius(bottom_bar_, 0, 0);
-    lv_obj_set_style_bg_color(bottom_bar_, lvgl_theme->background_color(), 0);
-    lv_obj_set_style_bg_opa(bottom_bar_, LV_OPA_50, 0);
-    lv_obj_set_style_text_color(bottom_bar_, lvgl_theme->text_color(), 0);
-    lv_obj_set_style_pad_all(bottom_bar_, lvgl_theme->spacing(4), 0);
-    lv_obj_set_style_border_width(bottom_bar_, 0, 0);
-    lv_obj_set_scrollbar_mode(bottom_bar_, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_align(bottom_bar_, LV_ALIGN_BOTTOM_MID, 0, 0);
+    recipe_bar_ = lv_obj_create(screen);
+    lv_obj_set_size(recipe_bar_, LV_HOR_RES, recipe_bar_height);
+    lv_obj_set_style_radius(recipe_bar_, 0, 0);
+    // Placeholder state: solid dark gray
+    lv_obj_set_style_bg_color(recipe_bar_, lv_color_hex(0x424242), 0);
+    lv_obj_set_style_bg_opa(recipe_bar_, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(recipe_bar_, 0, 0);
+    lv_obj_set_style_pad_all(recipe_bar_, 0, 0);
+    lv_obj_set_style_pad_left(recipe_bar_, lvgl_theme->spacing(4), 0);
+    lv_obj_set_style_pad_right(recipe_bar_, lvgl_theme->spacing(4), 0);
+    lv_obj_set_flex_flow(recipe_bar_, LV_FLEX_FLOW_COLUMN);  // Vertical layout for 2 rows
+    lv_obj_set_scrollbar_mode(recipe_bar_, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_align(recipe_bar_, LV_ALIGN_TOP_LEFT, 0, top_bar_height);
+    // Always visible - no LV_OBJ_FLAG_HIDDEN
 
-    /* chat_message_label_ placed in bottom_bar_, multiline wrapped display */
-    chat_message_label_ = lv_label_create(bottom_bar_);
+    // Recipe row 1: name with icon
+    recipe_name_label_ = lv_label_create(recipe_bar_);
+    lv_label_set_text(recipe_name_label_, "\xF0\x9F\x8D\xB3 等待食谱...");  // 🍳 等待食谱...
+    lv_obj_set_style_text_color(recipe_name_label_, lv_color_hex(0xBDBDBD), 0);  // Light gray for placeholder
+    lv_obj_set_width(recipe_name_label_, LV_HOR_RES - lvgl_theme->spacing(8));
+
+    // Recipe row 2: step info (placeholder: empty)
+    recipe_step_label_ = lv_label_create(recipe_bar_);
+    lv_label_set_text(recipe_step_label_, "");
+    lv_obj_set_style_text_color(recipe_step_label_, lv_color_white(), 0);
+    lv_obj_set_width(recipe_step_label_, LV_HOR_RES - lvgl_theme->spacing(8));
+
+    /* Chef AI: Timer display area (always visible, 3 rows) */
+    int timer_bar_height = bar_height * MAX_DISPLAY_TIMERS;  // 3 rows for timers
+    timer_bar_ = lv_obj_create(screen);
+    lv_obj_set_size(timer_bar_, LV_HOR_RES, timer_bar_height);
+    lv_obj_set_style_radius(timer_bar_, 0, 0);
+    // Placeholder state: solid dark gray
+    lv_obj_set_style_bg_color(timer_bar_, lv_color_hex(0x424242), 0);
+    lv_obj_set_style_bg_opa(timer_bar_, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(timer_bar_, 0, 0);
+    lv_obj_set_style_pad_all(timer_bar_, 0, 0);
+    lv_obj_set_style_pad_row(timer_bar_, 0, 0);  // No row spacing
+    lv_obj_set_style_pad_column(timer_bar_, 0, 0);  // No column spacing
+    lv_obj_set_flex_flow(timer_bar_, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scrollbar_mode(timer_bar_, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_align(timer_bar_, LV_ALIGN_TOP_LEFT, 0, top_bar_height + recipe_bar_height);  // Below recipe bar
+    // Always visible - no LV_OBJ_FLAG_HIDDEN
+
+    // Create timer rows (3 rows)
+    for (int i = 0; i < MAX_DISPLAY_TIMERS; i++) {
+        timer_rows_[i] = lv_obj_create(timer_bar_);
+        lv_obj_set_size(timer_rows_[i], LV_HOR_RES, bar_height);
+        lv_obj_set_style_bg_opa(timer_rows_[i], LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(timer_rows_[i], 0, 0);
+        lv_obj_set_style_pad_all(timer_rows_[i], 0, 0);
+        lv_obj_set_style_pad_left(timer_rows_[i], lvgl_theme->spacing(4), 0);
+        lv_obj_set_style_pad_right(timer_rows_[i], lvgl_theme->spacing(4), 0);
+        lv_obj_set_flex_flow(timer_rows_[i], LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(timer_rows_[i], LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_scrollbar_mode(timer_rows_[i], LV_SCROLLBAR_MODE_OFF);
+
+        // Timer name (left with icon)
+        timer_name_labels_[i] = lv_label_create(timer_rows_[i]);
+        lv_obj_set_style_text_color(timer_name_labels_[i], lv_color_white(), 0);
+
+        // Timer countdown (right)
+        timer_time_labels_[i] = lv_label_create(timer_rows_[i]);
+        lv_obj_set_style_text_color(timer_time_labels_[i], lv_color_white(), 0);
+
+        // All 3 rows visible with placeholder text (light gray on gray background)
+        char placeholder[32];
+        snprintf(placeholder, sizeof(placeholder), "\xE2\x8F\xB0 计时器 %d", i + 1);  // ⏰ 计时器 1/2/3
+        lv_label_set_text(timer_name_labels_[i], placeholder);
+        lv_obj_set_style_text_color(timer_name_labels_[i], lv_color_hex(0xBDBDBD), 0);  // Light gray placeholder
+        lv_label_set_text(timer_time_labels_[i], "--:--");
+        lv_obj_set_style_text_color(timer_time_labels_[i], lv_color_hex(0xBDBDBD), 0);  // Light gray placeholder
+    }
+
+    // Create timer for updating countdown display (1 second interval)
+    esp_timer_create_args_t timer_update_args = {
+        .callback = [](void *arg) {
+            LcdDisplay *display = static_cast<LcdDisplay*>(arg);
+            display->UpdateTimerDisplay();
+        },
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "timer_display_update",
+        .skip_unhandled_events = false,
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&timer_update_args, &timer_update_timer_));
+    // Start the timer update (1 second periodic)
+    ESP_ERROR_CHECK(esp_timer_start_periodic(timer_update_timer_, 1000000));  // 1 second
+
+    // Create timer for auto page turn when more than 3 timers (10 seconds per page)
+    esp_timer_create_args_t timer_page_args = {
+        .callback = [](void *arg) {
+            LcdDisplay *display = static_cast<LcdDisplay*>(arg);
+            display->NextTimerPage();
+        },
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "timer_page_flip",
+        .skip_unhandled_events = false,
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&timer_page_args, &timer_page_timer_));
+
+    /* Full-screen chat content area (below recipe/timer bars) */
+    int chat_area_y = top_bar_height + recipe_bar_height + timer_bar_height;  // Below status + recipe (2 rows) + timer (3 rows)
+    int chat_area_height = LV_VER_RES - chat_area_y - lvgl_theme->spacing(4);
+
+    chat_content_area_ = lv_obj_create(screen);
+    lv_obj_set_size(chat_content_area_, LV_HOR_RES - lvgl_theme->spacing(8), chat_area_height);
+    lv_obj_set_style_bg_opa(chat_content_area_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(chat_content_area_, 0, 0);
+    lv_obj_set_style_pad_all(chat_content_area_, lvgl_theme->spacing(2), 0);
+    lv_obj_set_scrollbar_mode(chat_content_area_, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_align(chat_content_area_, LV_ALIGN_TOP_MID, 0, chat_area_y);
+    // Always visible - no LV_OBJ_FLAG_HIDDEN
+
+    // Chat message label (for actual conversation, hidden initially)
+    chat_message_label_ = lv_label_create(chat_content_area_);
     lv_label_set_text(chat_message_label_, "");
-    lv_obj_set_width(chat_message_label_, LV_HOR_RES - lvgl_theme->spacing(8));
+    lv_obj_set_width(chat_message_label_, LV_HOR_RES - lvgl_theme->spacing(16));
     lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_set_style_text_color(chat_message_label_, lvgl_theme->text_color(), 0);
-    lv_obj_align(chat_message_label_, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_add_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);  // Hide until there is content
-#else
-    /* Top layer: Bottom bar - fixed height at bottom */
-    bottom_bar_ = lv_obj_create(screen);
-    lv_obj_set_size(bottom_bar_, LV_HOR_RES, text_font->line_height + lvgl_theme->spacing(8));
-    lv_obj_set_style_radius(bottom_bar_, 0, 0);
-    lv_obj_set_style_bg_color(bottom_bar_, lvgl_theme->background_color(), 0);
-    lv_obj_set_style_text_color(bottom_bar_, lvgl_theme->text_color(), 0);
-    lv_obj_set_style_pad_all(bottom_bar_, 0, 0);
-    lv_obj_set_style_pad_left(bottom_bar_, lvgl_theme->spacing(4), 0);
-    lv_obj_set_style_pad_right(bottom_bar_, lvgl_theme->spacing(4), 0);
-    lv_obj_set_style_border_width(bottom_bar_, 0, 0);
-    lv_obj_set_scrollbar_mode(bottom_bar_, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_align(bottom_bar_, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_align(chat_message_label_, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_add_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);
 
-    /* chat_message_label_ placed in bottom_bar_, single-line horizontal scroll */
-    chat_message_label_ = lv_label_create(bottom_bar_);
-    lv_label_set_text(chat_message_label_, "");
-    lv_obj_set_width(chat_message_label_, LV_HOR_RES - lvgl_theme->spacing(8));
-    lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(chat_message_label_, lvgl_theme->text_color(), 0);
-    lv_obj_align(chat_message_label_, LV_ALIGN_CENTER, 0, 0);
+    // Chat hint label (centered, shown when no chat)
+    chat_hint_label_ = lv_label_create(chat_content_area_);
+    lv_label_set_text(chat_hint_label_, "\xF0\x9F\x8E\xA4\n说 \"Hey Chef\" 开始");  // 🎤 + text
+    lv_obj_set_style_text_align(chat_hint_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(chat_hint_label_, lv_color_hex(0x888888), 0);  // Gray hint
+    lv_obj_center(chat_hint_label_);
 
-    // Start scrolling after a delay (short text won't scroll)
-    static lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_delay(&a, 1000);
-    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
-    lv_obj_set_style_anim(chat_message_label_, &a, LV_PART_MAIN);
-    lv_obj_set_style_anim_duration(chat_message_label_, lv_anim_speed_clamped(60, 300, 60000), LV_PART_MAIN);
-    lv_obj_add_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);  // Hide until there is content
-#endif
+    // Create page timer for auto page turn
+    esp_timer_create_args_t page_timer_args = {
+        .callback = [](void *arg) {
+            LcdDisplay *display = static_cast<LcdDisplay*>(arg);
+            display->NextChatPage();
+        },
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "chat_page_timer",
+        .skip_unhandled_events = false,
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&page_timer_args, &chat_page_timer_));
+
+    // Keep bottom_bar_ for backward compatibility but use chat_content_area_ for display
+    bottom_bar_ = chat_content_area_;
 
     low_battery_popup_ = lv_obj_create(screen);
     lv_obj_set_scrollbar_mode(low_battery_popup_, LV_SCROLLBAR_MODE_OFF);
@@ -986,12 +1123,15 @@ void LcdDisplay::SetupUI() {
     lv_obj_align(low_battery_popup_, LV_ALIGN_BOTTOM_MID, 0, -lvgl_theme->spacing(4));
     lv_obj_set_style_bg_color(low_battery_popup_, lvgl_theme->low_battery_color(), 0);
     lv_obj_set_style_radius(low_battery_popup_, lvgl_theme->spacing(4), 0);
-    
+
     low_battery_label_ = lv_label_create(low_battery_popup_);
     lv_label_set_text(low_battery_label_, Lang::Strings::BATTERY_NEED_CHARGE);
     lv_obj_set_style_text_color(low_battery_label_, lv_color_white(), 0);
     lv_obj_center(low_battery_label_);
     lv_obj_add_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN);
+
+    // Initial layout calculation to position emoji_box_ correctly below status bar
+    RecalculateChatAreaHeight();
 }
 
 void LcdDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {
@@ -1037,36 +1177,348 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
     DisplayLockGuard lock(this);
     if (chat_message_label_ == nullptr) {
         if (setup_ui_called_) {
-            ESP_LOGW(TAG, "SetChatMessage('%s', '%s') failed: chat_message_label_ is nullptr (SetupUI() was called but label not created)", role, content);
+            ESP_LOGW(TAG, "SetChatMessage('%s', '%s') failed: chat_message_label_ is nullptr", role, content);
         }
         return;
     }
-    lv_label_set_text(chat_message_label_, content);
-    // Show bottom_bar_ only when there is content (and subtitle is not globally hidden)
-    if (bottom_bar_ != nullptr) {
-        if (content == nullptr || content[0] == '\0') {
-            lv_obj_add_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);
-        } else if (!hide_subtitle_) {
-            lv_obj_remove_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);
+
+    // Stop page timer
+    if (chat_page_timer_) {
+        esp_timer_stop(chat_page_timer_);
+    }
+
+    // If content is empty, show hint label
+    if (content == nullptr || content[0] == '\0') {
+        chat_full_text_.clear();
+        chat_current_page_ = 0;
+        chat_total_pages_ = 0;
+        lv_label_set_text(chat_message_label_, "");
+        // Hide message, show hint
+        lv_obj_add_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);
+        if (chat_hint_label_) {
+            lv_obj_remove_flag(chat_hint_label_, LV_OBJ_FLAG_HIDDEN);
         }
+        // Also hide emoji_box_ if exists
+        if (emoji_box_) {
+            lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
     }
-#if CONFIG_USE_MULTILINE_CHAT_MESSAGE
-    // Re-align bottom_bar_ after text change so it stays anchored to the bottom
-    // as its height adapts to the wrapped content.
-    if (bottom_bar_ != nullptr) {
-        lv_obj_align(bottom_bar_, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+    if (hide_subtitle_) {
+        return;
     }
-#endif
+
+    // Hide hint, show message
+    if (chat_hint_label_) {
+        lv_obj_add_flag(chat_hint_label_, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_remove_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);
+
+    // Hide emoji_box_ when showing chat
+    if (emoji_box_) {
+        lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Store full text and calculate pages
+    chat_full_text_ = content;
+
+    // Calculate total lines based on text length and display width
+    // Approximate: each line ~20 Chinese characters or ~40 English chars at 14px font on 240px width
+    int chars_per_line = 18;  // Approximate for Chinese text
+    int total_chars = chat_full_text_.length();
+    // For UTF-8 Chinese, each char is ~3 bytes
+    int approx_chars = total_chars / 2;  // Rough estimate
+    int total_lines = (approx_chars + chars_per_line - 1) / chars_per_line;
+    if (total_lines < 1) total_lines = 1;
+
+    chat_total_pages_ = (total_lines + chat_lines_per_page_ - 1) / chat_lines_per_page_;
+    if (chat_total_pages_ < 1) chat_total_pages_ = 1;
+    chat_current_page_ = 0;
+
+    // Show first page
+    ShowChatPage(0);
+
+    // Start page timer if multiple pages
+    if (chat_total_pages_ > 1 && chat_page_timer_) {
+        esp_timer_start_once(chat_page_timer_, CHAT_PAGE_INTERVAL_MS * 1000);
+    }
+}
+
+void LcdDisplay::ShowChatPage(int page) {
+    if (page < 0 || page >= chat_total_pages_ || chat_message_label_ == nullptr) {
+        return;
+    }
+    chat_current_page_ = page;
+
+    // For simplicity, show all text and let LVGL handle wrapping
+    // In a more sophisticated implementation, we would split text into pages
+    // For now, just show the full text (LVGL will wrap it)
+    lv_label_set_text(chat_message_label_, chat_full_text_.c_str());
+
+    ESP_LOGI(TAG, "ShowChatPage: page %d/%d", page + 1, chat_total_pages_);
+}
+
+void LcdDisplay::NextChatPage() {
+    DisplayLockGuard lock(this);
+    if (chat_total_pages_ <= 1) {
+        return;
+    }
+
+    chat_current_page_++;
+    if (chat_current_page_ >= chat_total_pages_) {
+        chat_current_page_ = 0;  // Loop back to first page
+    }
+
+    ShowChatPage(chat_current_page_);
+
+    // Restart timer for next page
+    if (chat_page_timer_) {
+        esp_timer_start_once(chat_page_timer_, CHAT_PAGE_INTERVAL_MS * 1000);
+    }
 }
 
 void LcdDisplay::ClearChatMessages() {
     DisplayLockGuard lock(this);
-    // In non-wechat mode, just clear the chat message label and hide the bar
+
+    // Stop page timer
+    if (chat_page_timer_) {
+        esp_timer_stop(chat_page_timer_);
+    }
+
+    // Clear chat state
+    chat_full_text_.clear();
+    chat_current_page_ = 0;
+    chat_total_pages_ = 0;
+
     if (chat_message_label_ != nullptr) {
         lv_label_set_text(chat_message_label_, "");
+        lv_obj_add_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);
     }
-    if (bottom_bar_ != nullptr) {
-        lv_obj_add_flag(bottom_bar_, LV_OBJ_FLAG_HIDDEN);
+
+    // Show hint label again
+    if (chat_hint_label_) {
+        lv_obj_remove_flag(chat_hint_label_, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Hide emoji_box_ if exists
+    if (emoji_box_) {
+        lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void LcdDisplay::SetRecipeInfo(const char* recipe_name, int current_step, int total_steps) {
+    DisplayLockGuard lock(this);
+
+    if (recipe_bar_ == nullptr || recipe_name_label_ == nullptr || recipe_step_label_ == nullptr) {
+        return;
+    }
+
+    // Clear recipe if name is null or empty
+    if (recipe_name == nullptr || recipe_name[0] == '\0' || total_steps <= 0) {
+        ClearRecipeInfo();
+        return;
+    }
+
+    // Store recipe state
+    current_recipe_name_ = recipe_name;
+    current_recipe_step_ = current_step;
+    total_recipe_steps_ = total_steps;
+
+    // Update labels with active style (white text)
+    char name_buf[64];
+    snprintf(name_buf, sizeof(name_buf), "\xF0\x9F\x8D\xB3 %s", recipe_name);  // 🍳 emoji
+    lv_label_set_text(recipe_name_label_, name_buf);
+    lv_obj_set_style_text_color(recipe_name_label_, lv_color_white(), 0);
+
+    char step_buf[16];
+    snprintf(step_buf, sizeof(step_buf), "%d/%d", current_step, total_steps);
+    lv_label_set_text(recipe_step_label_, step_buf);
+    lv_obj_set_style_text_color(recipe_step_label_, lv_color_white(), 0);
+
+    // Set active background: solid deep green
+    lv_obj_set_style_bg_color(recipe_bar_, lv_color_hex(0x2E7D32), 0);
+    lv_obj_set_style_bg_opa(recipe_bar_, LV_OPA_COVER, 0);
+
+    ESP_LOGI(TAG, "Recipe info set: %s (%d/%d)", recipe_name, current_step, total_steps);
+}
+
+void LcdDisplay::ClearRecipeInfo() {
+    DisplayLockGuard lock(this);
+
+    current_recipe_name_.clear();
+    current_recipe_step_ = 0;
+    total_recipe_steps_ = 0;
+
+    // Reset to placeholder state: solid gray background
+    if (recipe_bar_) {
+        lv_obj_set_style_bg_color(recipe_bar_, lv_color_hex(0x424242), 0);
+        lv_obj_set_style_bg_opa(recipe_bar_, LV_OPA_COVER, 0);
+    }
+    if (recipe_name_label_) {
+        lv_label_set_text(recipe_name_label_, "\xF0\x9F\x8D\xB3 等待食谱...");  // 🍳 等待食谱...
+        lv_obj_set_style_text_color(recipe_name_label_, lv_color_hex(0xBDBDBD), 0);  // Light gray text
+    }
+    if (recipe_step_label_) {
+        lv_label_set_text(recipe_step_label_, "");
+    }
+
+    ESP_LOGI(TAG, "Recipe info cleared");
+}
+
+void LcdDisplay::UpdateTimerDisplay() {
+    DisplayLockGuard lock(this);
+
+    if (timer_bar_ == nullptr) {
+        return;
+    }
+
+    auto& timerMgr = TimerManager::GetInstance();
+    auto activeTimers = timerMgr.GetActiveTimers();
+    int total_timers = (int)activeTimers.size();
+
+    if (total_timers == 0) {
+        // No active timers: solid gray placeholder
+        lv_obj_set_style_bg_color(timer_bar_, lv_color_hex(0x424242), 0);
+        lv_obj_set_style_bg_opa(timer_bar_, LV_OPA_COVER, 0);
+        for (int i = 0; i < MAX_DISPLAY_TIMERS; i++) {
+            if (timer_rows_[i]) {
+                char placeholder[32];
+                snprintf(placeholder, sizeof(placeholder), "\xE2\x8F\xB0 计时器 %d", i + 1);
+                lv_label_set_text(timer_name_labels_[i], placeholder);
+                lv_obj_set_style_text_color(timer_name_labels_[i], lv_color_hex(0xBDBDBD), 0);
+                lv_label_set_text(timer_time_labels_[i], "--:--");
+                lv_obj_set_style_text_color(timer_time_labels_[i], lv_color_hex(0xBDBDBD), 0);
+            }
+        }
+        // Stop page timer if running
+        if (timer_page_timer_) {
+            esp_timer_stop(timer_page_timer_);
+        }
+        timer_current_page_ = 0;
+        return;
+    }
+
+    // Has active timers: solid deep blue
+    lv_obj_set_style_bg_color(timer_bar_, lv_color_hex(0x0D47A1), 0);
+    lv_obj_set_style_bg_opa(timer_bar_, LV_OPA_COVER, 0);
+
+    // Calculate pagination
+    int total_pages = (total_timers + MAX_DISPLAY_TIMERS - 1) / MAX_DISPLAY_TIMERS;
+    if (timer_current_page_ >= total_pages) {
+        timer_current_page_ = 0;
+    }
+    int start_index = timer_current_page_ * MAX_DISPLAY_TIMERS;
+
+    // Start or stop page timer based on timer count
+    if (total_timers > MAX_DISPLAY_TIMERS) {
+        // More than 3 timers: start page timer if not running
+        if (timer_page_timer_ && !esp_timer_is_active(timer_page_timer_)) {
+            esp_timer_start_periodic(timer_page_timer_, TIMER_PAGE_INTERVAL_MS * 1000);
+        }
+    } else {
+        // 3 or fewer timers: stop page timer
+        if (timer_page_timer_) {
+            esp_timer_stop(timer_page_timer_);
+        }
+        timer_current_page_ = 0;
+    }
+
+    // Update timer rows (always show all 3 rows)
+    for (int i = 0; i < MAX_DISPLAY_TIMERS; i++) {
+        int timer_index = start_index + i;
+        if (timer_index < total_timers) {
+            // Active timer: show real data
+            const Timer* timer = activeTimers[timer_index];
+
+            // Update timer name with icon
+            char name_buf[48];
+            snprintf(name_buf, sizeof(name_buf), "\xE2\x8F\xB0 %s", timer->name);  // ⏰ emoji
+            lv_label_set_text(timer_name_labels_[i], name_buf);
+
+            // Update timer countdown
+            uint32_t remaining = timer->remaining_seconds;
+            char time_buf[16];
+            if (remaining >= 3600) {
+                snprintf(time_buf, sizeof(time_buf), "%lu:%02lu:%02lu",
+                         (unsigned long)(remaining / 3600),
+                         (unsigned long)((remaining % 3600) / 60),
+                         (unsigned long)(remaining % 60));
+            } else {
+                snprintf(time_buf, sizeof(time_buf), "%02lu:%02lu",
+                         (unsigned long)(remaining / 60),
+                         (unsigned long)(remaining % 60));
+            }
+            lv_label_set_text(timer_time_labels_[i], time_buf);
+
+            // Change color based on state
+            if (timer->state == TimerState::EXPIRED) {
+                // Red for expired
+                lv_obj_set_style_text_color(timer_name_labels_[i], lv_color_hex(0xFF5252), 0);
+                lv_obj_set_style_text_color(timer_time_labels_[i], lv_color_hex(0xFF5252), 0);
+            } else if (remaining <= 30) {
+                // Yellow for last 30 seconds
+                lv_obj_set_style_text_color(timer_name_labels_[i], lv_color_hex(0xFFEB3B), 0);
+                lv_obj_set_style_text_color(timer_time_labels_[i], lv_color_hex(0xFFEB3B), 0);
+            } else {
+                // White for normal
+                lv_obj_set_style_text_color(timer_name_labels_[i], lv_color_white(), 0);
+                lv_obj_set_style_text_color(timer_time_labels_[i], lv_color_white(), 0);
+            }
+        } else {
+            // Unused slot: show placeholder (semi-transparent white on blue background)
+            char placeholder[32];
+            snprintf(placeholder, sizeof(placeholder), "\xE2\x8F\xB0 计时器 %d", i + 1);
+            lv_label_set_text(timer_name_labels_[i], placeholder);
+            lv_obj_set_style_text_color(timer_name_labels_[i], lv_color_hex(0x82B1FF), 0);  // Light blue
+            lv_label_set_text(timer_time_labels_[i], "--:--");
+            lv_obj_set_style_text_color(timer_time_labels_[i], lv_color_hex(0x82B1FF), 0);  // Light blue
+        }
+    }
+    // Timer bar height is fixed at 3 rows, no need to recalculate
+}
+
+void LcdDisplay::NextTimerPage() {
+    // Simply increment page, UpdateTimerDisplay will handle wrap
+    timer_current_page_++;
+    // UpdateTimerDisplay() will reset to 0 if page exceeds total pages
+}
+
+void LcdDisplay::RecalculateChatAreaHeight() {
+    if (chat_content_area_ == nullptr || current_theme_ == nullptr) {
+        return;
+    }
+
+    auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
+    auto text_font = lvgl_theme->text_font()->font();
+    int top_bar_height = text_font->line_height + lvgl_theme->spacing(4);
+    int bar_height = text_font->line_height + lvgl_theme->spacing(4);
+    int recipe_bar_height = bar_height * 2;  // Fixed 2 rows
+    int timer_bar_height = bar_height * MAX_DISPLAY_TIMERS;  // Fixed 3 rows
+
+    // Recipe bar and timer bar are always visible with fixed heights
+    int y_offset = top_bar_height;
+
+    // Recipe bar (always visible, 2 rows)
+    if (recipe_bar_) {
+        lv_obj_align(recipe_bar_, LV_ALIGN_TOP_LEFT, 0, y_offset);
+        y_offset += recipe_bar_height;
+    }
+
+    // Timer bar (always visible, 3 rows)
+    if (timer_bar_) {
+        lv_obj_align(timer_bar_, LV_ALIGN_TOP_LEFT, 0, y_offset);
+        y_offset += timer_bar_height;
+    }
+
+    // Update chat area size and position
+    int chat_area_height = LV_VER_RES - y_offset - lvgl_theme->spacing(4);
+    lv_obj_set_height(chat_content_area_, chat_area_height);
+    lv_obj_align(chat_content_area_, LV_ALIGN_TOP_MID, 0, y_offset);
+
+    // Re-center the hint label if it exists
+    if (chat_hint_label_) {
+        lv_obj_center(chat_hint_label_);
     }
 }
 #endif
@@ -1193,6 +1645,9 @@ void LcdDisplay::SetTheme(Theme* theme) {
     }
     
     // Update status bar elements
+    if (time_label_ != nullptr) {
+        lv_obj_set_style_text_color(time_label_, lvgl_theme->text_color(), 0);
+    }
     lv_obj_set_style_text_color(network_label_, lvgl_theme->text_color(), 0);
     lv_obj_set_style_text_color(status_label_, lvgl_theme->text_color(), 0);
     lv_obj_set_style_text_color(notification_label_, lvgl_theme->text_color(), 0);

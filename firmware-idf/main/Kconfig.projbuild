@@ -141,6 +141,9 @@ choice BOARD_TYPE
     config BOARD_TYPE_BREAD_COMPACT_WIFI_LCD
         bool "Bread Compact WiFi + LCD (面包板)"
         depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_BREAD_COMPACT_WIFI_LCD32
+        bool "Bread Compact WiFi + 3.2寸 LCD (ElatoAI)"
+        depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_BREAD_COMPACT_WIFI_CAM
         bool "Bread Compact WiFi + LCD + Camera (面包板)"
         depends on IDF_TARGET_ESP32S3     

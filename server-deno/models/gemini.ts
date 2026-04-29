@@ -192,7 +192,7 @@ export const connectToGemini = async ({
                     responseQueue.push(message);
                 },
                 onerror: function (e: any) {
-                    console.error("Gemini error:", e.message);
+                    console.error("Gemini error:", e.message, JSON.stringify(e));
                     ws.send(
                         JSON.stringify({
                             type: "server",
@@ -201,7 +201,7 @@ export const connectToGemini = async ({
                     );
                 },
                 onclose: function (e: any) {
-                    console.log("Gemini session closed:", e.reason);
+                    console.log("Gemini session closed:", e.reason, e.code, JSON.stringify(e));
                 },
             },
             config: config,

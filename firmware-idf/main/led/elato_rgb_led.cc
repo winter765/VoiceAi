@@ -67,6 +67,12 @@ void ElatoRgbLed::InitChannel(gpio_num_t gpio, ledc_channel_t channel, ledc_chan
     config.timer_sel = LEDC_TIMER_NUM;
     config.flags.output_invert = 0;
 
+    // 跳过未连接的 GPIO
+    if (gpio == GPIO_NUM_NC) {
+        ESP_LOGI(TAG, "Skipping LEDC channel %d (GPIO_NUM_NC)", channel);
+        return;
+    }
+
     ESP_ERROR_CHECK(ledc_channel_config(&config));
 }
 
@@ -82,14 +88,20 @@ void ElatoRgbLed::ApplyColor() {
     uint32_t duty_g = (g_ * LEDC_DUTY_MAX) / 255;
     uint32_t duty_b = (b_ * LEDC_DUTY_MAX) / 255;
 
-    ledc_set_duty(LEDC_LS_MODE, channel_red_.channel, duty_r);
-    ledc_update_duty(LEDC_LS_MODE, channel_red_.channel);
+    if (gpio_red_ != GPIO_NUM_NC) {
+        ledc_set_duty(LEDC_LS_MODE, channel_red_.channel, duty_r);
+        ledc_update_duty(LEDC_LS_MODE, channel_red_.channel);
+    }
 
-    ledc_set_duty(LEDC_LS_MODE, channel_green_.channel, duty_g);
-    ledc_update_duty(LEDC_LS_MODE, channel_green_.channel);
+    if (gpio_green_ != GPIO_NUM_NC) {
+        ledc_set_duty(LEDC_LS_MODE, channel_green_.channel, duty_g);
+        ledc_update_duty(LEDC_LS_MODE, channel_green_.channel);
+    }
 
-    ledc_set_duty(LEDC_LS_MODE, channel_blue_.channel, duty_b);
-    ledc_update_duty(LEDC_LS_MODE, channel_blue_.channel);
+    if (gpio_blue_ != GPIO_NUM_NC) {
+        ledc_set_duty(LEDC_LS_MODE, channel_blue_.channel, duty_b);
+        ledc_update_duty(LEDC_LS_MODE, channel_blue_.channel);
+    }
 }
 
 void ElatoRgbLed::TurnOn() {
@@ -102,14 +114,20 @@ void ElatoRgbLed::TurnOff() {
     std::lock_guard<std::mutex> lock(mutex_);
     StopEffects();
 
-    ledc_set_duty(LEDC_LS_MODE, channel_red_.channel, 0);
-    ledc_update_duty(LEDC_LS_MODE, channel_red_.channel);
+    if (gpio_red_ != GPIO_NUM_NC) {
+        ledc_set_duty(LEDC_LS_MODE, channel_red_.channel, 0);
+        ledc_update_duty(LEDC_LS_MODE, channel_red_.channel);
+    }
 
-    ledc_set_duty(LEDC_LS_MODE, channel_green_.channel, 0);
-    ledc_update_duty(LEDC_LS_MODE, channel_green_.channel);
+    if (gpio_green_ != GPIO_NUM_NC) {
+        ledc_set_duty(LEDC_LS_MODE, channel_green_.channel, 0);
+        ledc_update_duty(LEDC_LS_MODE, channel_green_.channel);
+    }
 
-    ledc_set_duty(LEDC_LS_MODE, channel_blue_.channel, 0);
-    ledc_update_duty(LEDC_LS_MODE, channel_blue_.channel);
+    if (gpio_blue_ != GPIO_NUM_NC) {
+        ledc_set_duty(LEDC_LS_MODE, channel_blue_.channel, 0);
+        ledc_update_duty(LEDC_LS_MODE, channel_blue_.channel);
+    }
 }
 
 void ElatoRgbLed::StopEffects() {
@@ -146,12 +164,18 @@ void ElatoRgbLed::OnBlinkTimer() {
         if (on) {
             ApplyColor();
         } else {
-            ledc_set_duty(LEDC_LS_MODE, channel_red_.channel, 0);
-            ledc_update_duty(LEDC_LS_MODE, channel_red_.channel);
-            ledc_set_duty(LEDC_LS_MODE, channel_green_.channel, 0);
-            ledc_update_duty(LEDC_LS_MODE, channel_green_.channel);
-            ledc_set_duty(LEDC_LS_MODE, channel_blue_.channel, 0);
-            ledc_update_duty(LEDC_LS_MODE, channel_blue_.channel);
+            if (gpio_red_ != GPIO_NUM_NC) {
+                ledc_set_duty(LEDC_LS_MODE, channel_red_.channel, 0);
+                ledc_update_duty(LEDC_LS_MODE, channel_red_.channel);
+            }
+            if (gpio_green_ != GPIO_NUM_NC) {
+                ledc_set_duty(LEDC_LS_MODE, channel_green_.channel, 0);
+                ledc_update_duty(LEDC_LS_MODE, channel_green_.channel);
+            }
+            if (gpio_blue_ != GPIO_NUM_NC) {
+                ledc_set_duty(LEDC_LS_MODE, channel_blue_.channel, 0);
+                ledc_update_duty(LEDC_LS_MODE, channel_blue_.channel);
+            }
         }
     } else {
         // Finite blink
@@ -159,12 +183,18 @@ void ElatoRgbLed::OnBlinkTimer() {
         if (blink_counter_ & 1) {
             ApplyColor();
         } else {
-            ledc_set_duty(LEDC_LS_MODE, channel_red_.channel, 0);
-            ledc_update_duty(LEDC_LS_MODE, channel_red_.channel);
-            ledc_set_duty(LEDC_LS_MODE, channel_green_.channel, 0);
-            ledc_update_duty(LEDC_LS_MODE, channel_green_.channel);
-            ledc_set_duty(LEDC_LS_MODE, channel_blue_.channel, 0);
-            ledc_update_duty(LEDC_LS_MODE, channel_blue_.channel);
+            if (gpio_red_ != GPIO_NUM_NC) {
+                ledc_set_duty(LEDC_LS_MODE, channel_red_.channel, 0);
+                ledc_update_duty(LEDC_LS_MODE, channel_red_.channel);
+            }
+            if (gpio_green_ != GPIO_NUM_NC) {
+                ledc_set_duty(LEDC_LS_MODE, channel_green_.channel, 0);
+                ledc_update_duty(LEDC_LS_MODE, channel_green_.channel);
+            }
+            if (gpio_blue_ != GPIO_NUM_NC) {
+                ledc_set_duty(LEDC_LS_MODE, channel_blue_.channel, 0);
+                ledc_update_duty(LEDC_LS_MODE, channel_blue_.channel);
+            }
 
             if (blink_counter_ == 0) {
                 esp_timer_stop(blink_timer_);

@@ -10,6 +10,7 @@
 #include <freertos/task.h>
 #include <esp_network.h>
 #include <esp_log.h>
+#include <esp_sntp.h>
 #include <utility>
 
 #include <font_awesome.h>
@@ -25,6 +26,130 @@ static const char *TAG = "WifiBoard";
 
 // Connection timeout in seconds
 static constexpr int CONNECT_TIMEOUT_SEC = 60;
+
+// Current timezone string (POSIX format, e.g., "CST-8")
+static char current_timezone[32] = "CST-8";
+
+// Fetch timezone from IP geolocation API
+static void FetchTimezoneFromNetwork(NetworkInterface* network) {
+    ESP_LOGI(TAG, "Fetching timezone from network...");
+
+    auto http = network->CreateHttp(0);
+    if (!http) {
+        ESP_LOGE(TAG, "Failed to create HTTP client for timezone");
+        return;
+    }
+
+    // Set short timeout (5 seconds) - timezone is not critical, use cached value on failure
+    http->SetTimeout(5000);
+
+    // Use ip-api.com (free, no API key required)
+    // Returns: {"timezone":"Asia/Shanghai", "offset":28800, ...}
+    if (!http->Open("GET", "http://ip-api.com/json/?fields=timezone,offset")) {
+        ESP_LOGW(TAG, "Timezone API timeout, using cached timezone");
+        return;
+    }
+
+    auto response = http->ReadAll();
+    int status_code = http->GetStatusCode();
+    http->Close();
+
+    if (status_code != 200) {
+        ESP_LOGE(TAG, "Timezone API failed with status %d", status_code);
+        return;
+    }
+
+    auto root = cJSON_Parse(response.c_str());
+    if (!root) {
+        ESP_LOGE(TAG, "Failed to parse timezone response");
+        return;
+    }
+
+    // Get offset in seconds (e.g., 28800 for UTC+8)
+    auto offset = cJSON_GetObjectItem(root, "offset");
+    auto tz_name = cJSON_GetObjectItem(root, "timezone");
+
+    if (cJSON_IsNumber(offset)) {
+        int offset_hours = offset->valueint / 3600;
+        // POSIX TZ format: sign is opposite (UTC+8 = "UTC-8")
+        if (offset_hours >= 0) {
+            snprintf(current_timezone, sizeof(current_timezone), "UTC-%d", offset_hours);
+        } else {
+            snprintf(current_timezone, sizeof(current_timezone), "UTC+%d", -offset_hours);
+        }
+
+        setenv("TZ", current_timezone, 1);
+        tzset();
+
+        // Save to NVS for persistence
+        Settings tz_settings("system", true);
+        tz_settings.SetString("timezone", current_timezone);
+    } else {
+        ESP_LOGW(TAG, "No offset in timezone response, using default");
+    }
+
+    cJSON_Delete(root);
+}
+
+// NTP time sync callback
+static void TimeSyncNotificationCallback(struct timeval *tv) {
+    // Re-apply current timezone after NTP sync
+    setenv("TZ", current_timezone, 1);
+    tzset();
+}
+
+// NTP time sync
+static void InitSntp() {
+    static bool sntp_initialized = false;
+    if (sntp_initialized) {
+        ESP_LOGI(TAG, "SNTP already initialized");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Initializing SNTP for time sync...");
+
+    // Set callback for time sync notification
+    esp_sntp_set_time_sync_notification_cb(TimeSyncNotificationCallback);
+
+    // Configure SNTP
+    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, "ntp.aliyun.com");
+    esp_sntp_setservername(1, "pool.ntp.org");
+    esp_sntp_setservername(2, "time.windows.com");
+
+    ESP_LOGI(TAG, "SNTP servers: %s, %s, %s",
+             esp_sntp_getservername(0),
+             esp_sntp_getservername(1),
+             esp_sntp_getservername(2));
+
+    esp_sntp_init();
+    sntp_initialized = true;
+
+    ESP_LOGI(TAG, "SNTP initialized, waiting for time sync...");
+
+    // Wait for time to be set (max 15 seconds)
+    int retry = 0;
+    const int retry_count = 30;
+    while (esp_sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET && ++retry < retry_count) {
+        if (retry % 5 == 0) {
+            ESP_LOGI(TAG, "Waiting for NTP sync... (%d/%d)", retry, retry_count);
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+
+    if (esp_sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
+        time_t now;
+        struct tm timeinfo;
+        time(&now);
+        localtime_r(&now, &timeinfo);
+        char strftime_buf[64];
+        strftime(strftime_buf, sizeof(strftime_buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
+        ESP_LOGI(TAG, "Time synchronized: %s", strftime_buf);
+    } else {
+        ESP_LOGW(TAG, "Time sync not completed yet (status=%d), will continue in background",
+                 esp_sntp_get_sync_status());
+    }
+}
 
 WifiBoard::WifiBoard() {
     // Create connection timeout timer
@@ -114,6 +239,10 @@ void WifiBoard::OnNetworkEvent(NetworkEvent event, const std::string& data) {
 #endif
             in_config_mode_ = false;
             ESP_LOGI(TAG, "Connected to WiFi: %s", data.c_str());
+            // Fetch timezone from IP geolocation before NTP sync
+            FetchTimezoneFromNetwork(GetNetwork());
+            // Sync time via NTP
+            InitSntp();
             // Fetch ElatoAI auth token after WiFi connects
             FetchElatoToken();
             break;

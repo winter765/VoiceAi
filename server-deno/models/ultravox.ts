@@ -478,6 +478,30 @@ async function handleToolCall(
                 break;
             }
 
+            case "set_device_timezone": {
+                const { offset_hours } = parameters;
+
+                // Validate offset range (-12 to +14)
+                if (offset_hours < -12 || offset_hours > 14) {
+                    result = { success: false, error: "Invalid timezone offset. Must be between -12 and +14." };
+                    break;
+                }
+
+                // Send timezone command to ESP32
+                espWs.send(JSON.stringify({
+                    type: "server",
+                    msg: "SYSTEM.SET_TIMEZONE",
+                    offset_hours: offset_hours,
+                }));
+
+                console.log(`[CHEF] Timezone set to UTC${offset_hours >= 0 ? '+' : ''}${offset_hours}`);
+                result = {
+                    success: true,
+                    message: `Timezone set to UTC${offset_hours >= 0 ? '+' : ''}${offset_hours}`
+                };
+                break;
+            }
+
             default:
                 console.log(`[CHEF] Unknown tool: ${toolName}`);
                 result = { success: false, error: `Unknown tool: ${toolName}` };
