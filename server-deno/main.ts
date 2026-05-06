@@ -21,9 +21,10 @@ import { connectToGrok } from "./models/grok.ts";
 import { connectToUltravox } from "./models/ultravox.ts";
 import { connectToEcho } from "./models/echo.ts";
 import { sessionManager } from "./session-manager.ts";
+import { usageTracker } from "./usage-tracker.ts";
 
 // --- REST API handlers ---
-function handleApiRequest(req: IncomingMessage, res: ServerResponse): boolean {
+async function handleApiRequest(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
     const path = url.pathname;
 
@@ -82,13 +83,142 @@ function handleApiRequest(req: IncomingMessage, res: ServerResponse): boolean {
         return true;
     }
 
+    // GET /api/usage - List active usage tracking sessions
+    if (path === "/api/usage" && req.method === "GET") {
+        const sessions = usageTracker.getAllSessions();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+            count: sessions.length,
+            sessions: sessions.map(s => ({
+                deviceId: s.deviceId,
+                deviceMac: s.deviceMac,
+                provider: s.provider,
+                sessionId: s.sessionId,
+                sessionStart: s.sessionStart.toISOString(),
+                audioInputMs: s.audioInputMs,
+                audioOutputMs: s.audioOutputMs,
+                inputBytes: s.inputBytes,
+                outputBytes: s.outputBytes,
+            })),
+        }));
+        return true;
+    }
+
+    // GET /api/usage/summary - Get usage summary from database
+    if (path === "/api/usage/summary" && req.method === "GET") {
+        const period = url.searchParams.get("period") || "7d";
+        const supabase = getSupabaseClient();
+
+        // Calculate date range
+        let startDate = new Date();
+        if (period === "1d") {
+            startDate.setDate(startDate.getDate() - 1);
+        } else if (period === "7d") {
+            startDate.setDate(startDate.getDate() - 7);
+        } else if (period === "30d") {
+            startDate.setDate(startDate.getDate() - 30);
+        }
+
+        try {
+            const { data, error } = await supabase
+                .from("usage_logs")
+                .select("*")
+                .gte("session_start", startDate.toISOString())
+                .order("session_start", { ascending: false });
+
+            if (error) {
+                res.writeHead(500, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: error.message }));
+                return true;
+            }
+
+            // Aggregate by provider
+            const byProvider: Record<string, { sessions: number; cost_usd: number; audio_input_ms: number; audio_output_ms: number }> = {};
+            const byDevice: Record<string, { sessions: number; cost_usd: number }> = {};
+            let totalCost = 0;
+
+            for (const log of data || []) {
+                // By provider
+                if (!byProvider[log.provider]) {
+                    byProvider[log.provider] = { sessions: 0, cost_usd: 0, audio_input_ms: 0, audio_output_ms: 0 };
+                }
+                byProvider[log.provider].sessions++;
+                byProvider[log.provider].cost_usd += parseFloat(log.cost_usd) || 0;
+                byProvider[log.provider].audio_input_ms += log.audio_input_ms || 0;
+                byProvider[log.provider].audio_output_ms += log.audio_output_ms || 0;
+
+                // By device
+                const deviceKey = log.device_mac || log.device_id || "unknown";
+                if (!byDevice[deviceKey]) {
+                    byDevice[deviceKey] = { sessions: 0, cost_usd: 0 };
+                }
+                byDevice[deviceKey].sessions++;
+                byDevice[deviceKey].cost_usd += parseFloat(log.cost_usd) || 0;
+
+                totalCost += parseFloat(log.cost_usd) || 0;
+            }
+
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({
+                period,
+                start_date: startDate.toISOString(),
+                end_date: new Date().toISOString(),
+                total_sessions: data?.length || 0,
+                total_cost_usd: totalCost.toFixed(6),
+                by_provider: byProvider,
+                by_device: Object.entries(byDevice).map(([mac, stats]) => ({
+                    device_mac: mac,
+                    ...stats,
+                    cost_usd: stats.cost_usd.toFixed(6),
+                })),
+            }));
+        } catch (e) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: String(e) }));
+        }
+        return true;
+    }
+
+    // GET /api/usage/device/:mac - Get usage for specific device
+    const usageDeviceMatch = path.match(/^\/api\/usage\/device\/(.+)$/);
+    if (usageDeviceMatch && req.method === "GET") {
+        const deviceMac = decodeURIComponent(usageDeviceMatch[1]);
+        const supabase = getSupabaseClient();
+
+        try {
+            const { data, error } = await supabase
+                .from("usage_logs")
+                .select("*")
+                .eq("device_mac", deviceMac)
+                .order("session_start", { ascending: false })
+                .limit(100);
+
+            if (error) {
+                res.writeHead(500, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: error.message }));
+                return true;
+            }
+
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({
+                device_mac: deviceMac,
+                total_sessions: data?.length || 0,
+                logs: data,
+            }));
+        } catch (e) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: String(e) }));
+        }
+        return true;
+    }
+
     // Not an API request
     return false;
 }
 
-const server = createServer((req, res) => {
+const server = createServer(async (req, res) => {
     // Try to handle as API request
-    if (handleApiRequest(req, res)) {
+    if (await handleApiRequest(req, res)) {
         return;
     }
 

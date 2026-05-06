@@ -3,6 +3,7 @@ import type { RawData } from "npm:@types/ws";
 import { WebSocket } from "npm:ws";
 import { addConversation, getDeviceInfo } from "../supabase.ts";
 import { createOpusPacketizer, createOpusDecoder, isDev, humeApiKey, downsamplePcm, extractPcmFromWav, boostLimitPCM16LEInPlace, INPUT_SAMPLE_RATE } from "../utils.ts";
+import { usageTracker } from "../usage-tracker.ts";
 
 export const connectToHume = ({
     ws,
@@ -15,7 +16,15 @@ export const connectToHume = ({
     const { user, supabase } = payload;
     const { personality } = user;
 
-    const opus = createOpusPacketizer((packet) => ws.send(packet));
+    // Get device ID for usage tracking
+    const deviceId = user.device?.mac_address || user.device_id || "unknown";
+    let usageLogId: string | null = null;
+
+    const opus = createOpusPacketizer((packet) => {
+        // Track output audio usage (20ms per Opus frame)
+        usageTracker.addAudioOutput(deviceId, packet.length, 20);
+        ws.send(packet);
+    });
     const inputDecoder = createOpusDecoder();  // Decode 16kHz Opus from ESP32
 
     console.log(`Connecting to Hume with key "${humeApiKey?.slice(0, 3)}..."`);
@@ -37,9 +46,19 @@ export const connectToHume = ({
     let createdSent = false;
 
     // Handle Hume WebSocket connection
-    humeWs.on("open", () => {
+    humeWs.on("open", async () => {
         console.log("✅ Connected to Hume WebSocket API successfully");
         isConnected = true;
+
+        // Start usage tracking session
+        usageLogId = await usageTracker.startSession(supabase, {
+            deviceId,
+            deviceMac: user.device?.mac_address || null,
+            deviceUuid: user.device_id || null,
+            userId: user.user_id || null,
+            provider: "hume",
+            sessionId: null,
+        });
 
         // Configure Hume session settings for input audio format (16kHz to match ESP32 mic)
         humeWs.send(JSON.stringify({
@@ -91,12 +110,19 @@ export const connectToHume = ({
                 case "assistant_message":
                     const assistantMsg = message as HumeAssistantMessage;
 
+                    // Get pending output usage for this message
+                    const assistantUsage = usageTracker.getPendingUsage(deviceId, "assistant");
                     // Store conversation in database
                     await addConversation(
                         supabase,
                         "assistant",
                         assistantMsg.message.content,
                         user,
+                        assistantUsage ? {
+                            usageLogId: assistantUsage.usageLogId,
+                            audioDurationMs: assistantUsage.audioDurationMs,
+                            audioBytes: assistantUsage.audioBytes,
+                        } : undefined,
                     );
                     ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.ASSISTANT", text: assistantMsg.message.content }));
                     break;
@@ -161,11 +187,18 @@ export const connectToHume = ({
 
                 case "user_message":
                     console.log("User message acknowledged:", message);
+                    // Get pending input usage for this message
+                    const userUsage = usageTracker.getPendingUsage(deviceId, "user");
                     await addConversation(
                         supabase,
                         "user",
                         message.message.content,
                         user,
+                        userUsage ? {
+                            usageLogId: userUsage.usageLogId,
+                            audioDurationMs: userUsage.audioDurationMs,
+                            audioBytes: userUsage.audioBytes,
+                        } : undefined,
                     );
                     ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.USER", text: message.message.content }));
                     break;
@@ -245,6 +278,9 @@ export const connectToHume = ({
     const messageHandler = async (data: RawData, isBinary: boolean) => {
         try {
             if (isBinary) {
+                // Track input audio usage (20ms per Opus frame)
+                usageTracker.addAudioInput(deviceId, (data as Buffer).length, 20);
+
                 // Decode Opus to PCM (16kHz) from ESP32
                 try {
                     const pcmData = inputDecoder.decode(data as Buffer);
@@ -289,6 +325,12 @@ export const connectToHume = ({
 
     ws.on("close", async (code: number, reason: string) => {
         console.log(`ESP32 WebSocket closed: ${code} - ${reason}`);
+
+        // End usage tracking session
+        if (usageLogId) {
+            await usageTracker.endSession(supabase, deviceId);
+        }
+
         await closeHandler();
         opus.close();
         humeWs.close();
