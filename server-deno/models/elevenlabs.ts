@@ -16,6 +16,7 @@ import {
 	SAMPLE_RATE,
 	INPUT_SAMPLE_RATE,
 } from "../utils.ts";
+import { usageTracker } from "../usage-tracker.ts";
 
 // Calculate audio level for debugging
 function calculateAudioLevel(audioData: any): number {
@@ -77,7 +78,16 @@ export const connectToElevenLabs = async ({
 	}
 
 	const { user, supabase } = payload;
-	const opus = createOpusPacketizer((packet) => ws.send(packet));
+
+	// Get device ID for usage tracking
+	const deviceId = user.device?.mac_address || user.device_id || "unknown";
+	let usageLogId: string | null = null;
+
+	const opus = createOpusPacketizer((packet) => {
+		// Track output audio usage (20ms per Opus frame)
+		usageTracker.addAudioOutput(deviceId, packet.length, 20);
+		ws.send(packet);
+	});
 	const inputDecoder = createOpusDecoder();  // Decode 16kHz Opus from ESP32
 
 	// Queue messages until ElevenLabs connection is ready.
@@ -92,6 +102,9 @@ export const connectToElevenLabs = async ({
 	const handleClientMessage = async (data: any, isBinary: boolean) => {
 		try {
 			if (isBinary) {
+				// Track input audio usage (20ms per Opus frame)
+				usageTracker.addAudioInput(deviceId, data.length, 20);
+
 				// Decode Opus to PCM (16kHz) from ESP32
 				try {
 					const pcmData = inputDecoder.decode(data);
@@ -176,6 +189,12 @@ export const connectToElevenLabs = async ({
 
 	ws.on("close", async (code: number, reason: string) => {
 		console.log(`ESP32 WebSocket closed with code ${code}, reason: ${reason}`);
+
+		// End usage tracking session
+		if (usageLogId) {
+			await usageTracker.endSession(supabase, deviceId);
+		}
+
 		await closeHandler();
 		opus.close();
 		elevenLabsConnection?.close();
@@ -187,6 +206,16 @@ export const connectToElevenLabs = async ({
 	});
 
 	try {
+		// Start usage tracking session
+		usageLogId = await usageTracker.startSession(supabase, {
+			deviceId,
+			deviceMac: user.device?.mac_address || null,
+			deviceUuid: user.device_id || null,
+			userId: user.user_id || null,
+			provider: "elevenlabs",
+			sessionId: null,
+		});
+
 		// For server-side usage, we need to get a signed URL first.
 		const signedUrlResponse = await fetch(
 			`https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=${agentId}`,
@@ -274,11 +303,18 @@ export const connectToElevenLabs = async ({
 							"User transcript:",
 							event.user_transcription_event.user_transcript,
 						);
+						// Get pending input usage for this message
+						const userUsage = usageTracker.getPendingUsage(deviceId, "user");
 						addConversation(
 							supabase,
 							"user",
 							event.user_transcription_event.user_transcript,
 							user,
+							userUsage ? {
+								usageLogId: userUsage.usageLogId,
+								audioDurationMs: userUsage.audioDurationMs,
+								audioBytes: userUsage.audioBytes,
+							} : undefined,
 						);
 						ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.USER", text: event.user_transcription_event.user_transcript }));
 					}
@@ -287,11 +323,18 @@ export const connectToElevenLabs = async ({
 				case "agent_response":
 					if (event.agent_response_event?.agent_response) {
 						console.log("Agent response:", event.agent_response_event.agent_response);
+						// Get pending output usage for this message
+						const assistantUsage = usageTracker.getPendingUsage(deviceId, "assistant");
 						addConversation(
 							supabase,
 							"assistant",
 							event.agent_response_event.agent_response,
 							user,
+							assistantUsage ? {
+								usageLogId: assistantUsage.usageLogId,
+								audioDurationMs: assistantUsage.audioDurationMs,
+								audioBytes: assistantUsage.audioBytes,
+							} : undefined,
 						);
 						ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.ASSISTANT", text: event.agent_response_event.agent_response }));
 

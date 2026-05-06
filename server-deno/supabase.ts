@@ -226,19 +226,45 @@ export const createSystemPrompt = (
     return commonPrompt + systemPrompt;
 };
 
+export interface ConversationUsageData {
+    usageLogId?: string | null;
+    audioDurationMs?: number;
+    audioBytes?: number;
+    tokens?: number;
+}
+
 export const addConversation = async (
     supabase: SupabaseClient,
     speaker: "user" | "assistant",
     content: string,
     user: IUser,
+    usageData?: ConversationUsageData,
 ): Promise<void> => {
-    const { error } = await supabase.from("conversations").insert({
+    const insertData: Record<string, unknown> = {
         role: speaker,
         content,
         user_id: user.user_id,
         is_sensitive: false,
         personality_key: user.personality?.key,
-    });
+    };
+
+    // Add usage tracking fields if provided
+    if (usageData) {
+        if (usageData.usageLogId) {
+            insertData.usage_log_id = usageData.usageLogId;
+        }
+        if (usageData.audioDurationMs !== undefined) {
+            insertData.audio_duration_ms = usageData.audioDurationMs;
+        }
+        if (usageData.audioBytes !== undefined) {
+            insertData.audio_bytes = usageData.audioBytes;
+        }
+        if (usageData.tokens !== undefined) {
+            insertData.tokens = usageData.tokens;
+        }
+    }
+
+    const { error } = await supabase.from("conversations").insert(insertData);
 
     if (error) {
         throw new Error("Failed to add conversation");

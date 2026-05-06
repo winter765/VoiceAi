@@ -10,6 +10,7 @@ import {
 } from "npm:@google/genai";
 import { createOpusPacketizer, createOpusDecoder, geminiApiKey, isDev, defaultGeminiVoice } from "../utils.ts";
 import { addConversation } from "../supabase.ts";
+import { usageTracker } from "../usage-tracker.ts";
 
 export const connectToGemini = async ({
     ws,
@@ -22,7 +23,15 @@ export const connectToGemini = async ({
     const { user, supabase } = payload;
     const voiceName = user.personality?.oai_voice ?? defaultGeminiVoice;
 
-    const opus = createOpusPacketizer((packet) => ws.send(packet));
+    // Get device ID for usage tracking
+    const deviceId = user.device?.mac_address || user.device_id || "unknown";
+    let usageLogId: string | null = null;
+
+    const opus = createOpusPacketizer((packet) => {
+        // Track output audio usage (20ms per Opus frame)
+        usageTracker.addAudioOutput(deviceId, packet.length, 20);
+        ws.send(packet);
+    });
     const inputDecoder = createOpusDecoder();  // Decode 16kHz Opus from ESP32
 
     console.log(`Connecting with Gemini key "${geminiApiKey?.slice(0, 3)}..."`);
@@ -159,20 +168,32 @@ export const connectToGemini = async ({
                     ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.ASSISTANT", text: outputTranscriptionText }));
                 }
 
-                // Add user transcription to supabase
+                // Add user transcription to supabase with usage data
+                const userUsage = usageTracker.getPendingUsage(deviceId, "user");
                 await addConversation(
                     supabase,
                     "user",
                     inputTranscriptionText,
                     user,
+                    userUsage ? {
+                        usageLogId: userUsage.usageLogId,
+                        audioDurationMs: userUsage.audioDurationMs,
+                        audioBytes: userUsage.audioBytes,
+                    } : undefined,
                 );
 
-                // Add assistant transcription to supabase
+                // Add assistant transcription to supabase with usage data
+                const assistantUsage = usageTracker.getPendingUsage(deviceId, "assistant");
                 await addConversation(
                     supabase,
                     "assistant",
                     outputTranscriptionText,
                     user,
+                    assistantUsage ? {
+                        usageLogId: assistantUsage.usageLogId,
+                        audioDurationMs: assistantUsage.audioDurationMs,
+                        audioBytes: assistantUsage.audioBytes,
+                    } : undefined,
                 );
             }
         } catch (error) {
@@ -182,6 +203,16 @@ export const connectToGemini = async ({
 
     // Connect to Google Gemini Live
     try {
+        // Start usage tracking session
+        usageLogId = await usageTracker.startSession(supabase, {
+            deviceId,
+            deviceMac: user.device?.mac_address || null,
+            deviceUuid: user.device_id || null,
+            userId: user.user_id || null,
+            provider: "gemini",
+            sessionId: null,
+        });
+
         geminiSession = await ai.live.connect({
             model: model,
             callbacks: {
@@ -224,6 +255,9 @@ export const connectToGemini = async ({
     ws.on("message", (data: any, isBinary: boolean) => {
         try {
             if (isBinary) {
+                // Track input audio usage (20ms per Opus frame)
+                usageTracker.addAudioInput(deviceId, data.length, 20);
+
                 // Decode Opus to PCM (16kHz) from ESP32
                 const pcmData = inputDecoder.decode(data);
                 const pcmBuffer = Buffer.from(pcmData);
@@ -253,6 +287,12 @@ export const connectToGemini = async ({
 
     ws.on("close", async (code: number, reason: string) => {
         console.log(`WebSocket closed with code ${code}, reason: ${reason}`);
+
+        // End usage tracking session
+        if (usageLogId) {
+            await usageTracker.endSession(supabase, deviceId);
+        }
+
         await closeHandler();
         opus.close();
         geminiSession?.close();

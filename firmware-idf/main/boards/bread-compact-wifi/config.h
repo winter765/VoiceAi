@@ -63,4 +63,8 @@
 // A MCP Test: Control a lamp
 #define LAMP_GPIO GPIO_NUM_18
 
+// Mouth control GPIO for external toy animation
+// HIGH when AI is speaking, LOW when stopped
+#define MOUTH_GPIO GPIO_NUM_17
+
 #endif // _BOARD_CONFIG_H_

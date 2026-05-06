@@ -5,6 +5,7 @@ import { WebSocket } from "npm:ws";
 import { addConversation, getDeviceInfo, getChatHistory } from "../supabase.ts";
 import { createOpusPacketizer, createOpusDecoder, isDev, ultravoxApiKey } from "../utils.ts";
 import { sessionManager } from "../session-manager.ts";
+import { usageTracker } from "../usage-tracker.ts";
 import { CHEF_PERSONALITY_KEY, chefTools, classifyNavigationIntent } from "../prompts/chef.ts";
 import { getOrGenerateReminderAudio } from "../services/tts.ts";
 import type { SupabaseClient } from "npm:@supabase/supabase-js";
@@ -682,6 +683,9 @@ export const connectToUltravox = async ({
     let isSessionActive = false;
     let sessionDetectedLanguage: 'zh' | 'en' = 'en';  // Detected from conversation history
 
+    // --- Usage tracking ---
+    let usageLogId: string | null = null;
+
     // --- Heartbeat state ---
     let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
     let heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -689,10 +693,10 @@ export const connectToUltravox = async ({
     let isAlive = true;
 
     // Cleanup function for SessionManager
-    const cleanup = () => {
+    const cleanup = async () => {
         console.log(`[UV] Cleanup called for device ${deviceId}`);
         stopHeartbeat();
-        stopSession();
+        await stopSession();
         try {
             if (ws.readyState === WebSocket.OPEN) {
                 ws.close();
@@ -785,6 +789,8 @@ export const connectToUltravox = async ({
         if (opusPacketsSent <= 5 || opusPacketsSent % 10 === 1) {
             console.log(`[AUDIO-DIAG] Opus→ESP32: packet #${opusPacketsSent}, size=${packet.length}B, first4bytes=[${Array.from(packet.slice(0, 4)).map(b => '0x' + b.toString(16).padStart(2, '0')).join(',')}]`);
         }
+        // Track output audio usage (20ms per Opus frame)
+        usageTracker.addAudioOutput(deviceId, packet.length, 20);
         ws.send(packet);
     });
 
@@ -809,6 +815,17 @@ export const connectToUltravox = async ({
         }
 
         console.log("[UV] START_SESSION: Creating Ultravox call...");
+
+        // Start usage tracking session
+        usageLogId = await usageTracker.startSession(supabase, {
+            deviceId,
+            deviceMac: user.device?.mac_address || null,
+            deviceUuid: user.device_id || null,
+            userId: user.user_id || null,
+            provider: "ultravox",
+            sessionId: null, // Will be updated after call creation
+        });
+
 
         // Clean up expired timers at session start (for Chef mode)
         if (isChefMode) {
@@ -870,9 +887,19 @@ export const connectToUltravox = async ({
                 tools,
             });
             console.log(`[UV] Ultravox call created: ${callData.callId}`);
+
+            // Update usage tracking with actual session ID
+            if (usageLogId) {
+                await usageTracker.updateSessionId(supabase, deviceId, callData.callId);
+            }
         } catch (e) {
             console.error("[UV] Failed to create Ultravox call:", e);
             ws.send(JSON.stringify({ type: "server", msg: "RESPONSE.ERROR" }));
+            // End usage tracking on error
+            if (usageLogId) {
+                await usageTracker.endSession(supabase, deviceId);
+                usageLogId = null;
+            }
             return;
         }
 
@@ -1058,7 +1085,13 @@ export const connectToUltravox = async ({
                                     // Don't send duplicate to ESP32 or save to database
                                 } else {
                                     ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.ASSISTANT", text: outputTranscript }));
-                                    addConversation(supabase, "assistant", outputTranscript, user);
+                                    // Get pending output usage for this message
+                                    const assistantUsage = usageTracker.getPendingUsage(deviceId, "assistant");
+                                    addConversation(supabase, "assistant", outputTranscript, user, assistantUsage ? {
+                                        usageLogId: assistantUsage.usageLogId,
+                                        audioDurationMs: assistantUsage.audioDurationMs,
+                                        audioBytes: assistantUsage.audioBytes,
+                                    } : undefined);
                                     lastOutputTranscript = outputTranscript;
                                 }
                             }
@@ -1084,7 +1117,13 @@ export const connectToUltravox = async ({
                                     lastUserTranscript = ""; // Echo doesn't count as user input
                                 } else {
                                     ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.USER", text: userText }));
-                                    addConversation(supabase, "user", userText, user);
+                                    // Get pending input usage for this message
+                                    const userUsage = usageTracker.getPendingUsage(deviceId, "user");
+                                    addConversation(supabase, "user", userText, user, userUsage ? {
+                                        usageLogId: userUsage.usageLogId,
+                                        audioDurationMs: userUsage.audioDurationMs,
+                                        audioBytes: userUsage.audioBytes,
+                                    } : undefined);
                                     lastUserTranscript = userText; // Save meaningful user input
 
                                     // Chef mode: Server-side navigation command handling
@@ -1293,7 +1332,7 @@ export const connectToUltravox = async ({
     }
 
     // Stop the current Ultravox call session
-    function stopSession() {
+    async function stopSession() {
         if (!isSessionActive && !uvWs) {
             console.log("[UV] No active session to stop");
             return;
@@ -1307,6 +1346,13 @@ export const connectToUltravox = async ({
             uvWs.close();
             uvWs = null;
         }
+
+        // End usage tracking and write to database
+        if (usageLogId) {
+            await usageTracker.endSession(supabase, deviceId);
+            usageLogId = null;
+        }
+
         // Notify ESP32 that session has ended so it can update state
         ws.send(JSON.stringify({ type: "server", msg: "RESPONSE.COMPLETE" }));
         console.log("[UV] Sent RESPONSE.COMPLETE to ESP32 after STOP_SESSION");
@@ -1329,6 +1375,9 @@ export const connectToUltravox = async ({
                 try {
                     const pcmData = inputDecoder.decode(data as Buffer);
                     decodedPcmBytes += pcmData.length;
+
+                    // Track input audio usage (20ms per Opus frame)
+                    usageTracker.addAudioInput(deviceId, (data as Buffer).length, 20);
 
                     if (audioPacketCount % 100 === 1) {
                         console.log(`[DEBUG] ESP32 audio: packet #${audioPacketCount}, opus=${(data as Buffer).length}B, pcm=${pcmData.length}B, totalPcm=${decodedPcmBytes}B`);
@@ -1374,10 +1423,10 @@ export const connectToUltravox = async ({
         }
     });
 
-    ws.on("error", (error: any) => {
+    ws.on("error", async (error: any) => {
         console.error("[UV] ESP32 WebSocket error:", error);
         stopHeartbeat();
-        stopSession();
+        await stopSession();
         sessionManager.unregister(deviceId);
     });
 
@@ -1385,7 +1434,7 @@ export const connectToUltravox = async ({
         console.log(`[UV] ESP32 WebSocket closed with code ${code}, reason: ${reason}`);
         console.log(`[DEBUG] Audio summary: ${audioPacketCount} packets, ${totalAudioBytes} bytes total`);
         stopHeartbeat();
-        stopSession();
+        await stopSession();
         sessionManager.unregister(deviceId);
         await closeHandler();
         opus.close();

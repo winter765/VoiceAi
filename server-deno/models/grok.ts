@@ -3,6 +3,7 @@ import type { RawData } from "npm:@types/ws";
 import { WebSocket } from "npm:ws";
 import { addConversation, getDeviceInfo } from "../supabase.ts";
 import { createOpusPacketizer, createOpusDecoder, isDev, xaiApiKey, defaultGrokVoice } from "../utils.ts";
+import { usageTracker } from "../usage-tracker.ts";
 
 const XAI_REALTIME_URL = "wss://api.x.ai/v1/realtime";
 
@@ -20,9 +21,17 @@ export const connectToGrok = async ({
         throw new Error("XAI_API_KEY is not set");
     }
 
+    // Get device ID for usage tracking
+    const deviceId = user.device?.mac_address || user.device_id || "unknown";
+    let usageLogId: string | null = null;
+
     const voice = user.personality?.oai_voice ?? defaultGrokVoice;
 
-    const opus = createOpusPacketizer((packet) => ws.send(packet));
+    const opus = createOpusPacketizer((packet) => {
+        // Track output audio usage (20ms per Opus frame)
+        usageTracker.addAudioOutput(deviceId, packet.length, 20);
+        ws.send(packet);
+    });
     const inputDecoder = createOpusDecoder();  // Decode 16kHz Opus from ESP32
 
     const grokWs = new WebSocket(XAI_REALTIME_URL, {
@@ -69,8 +78,18 @@ export const connectToGrok = async ({
         grokWs.send(JSON.stringify({ type: "response.create" }));
     };
 
-    grokWs.on("open", () => {
+    grokWs.on("open", async () => {
         isConnected = true;
+
+        // Start usage tracking session
+        usageLogId = await usageTracker.startSession(supabase, {
+            deviceId,
+            deviceMac: user.device?.mac_address || null,
+            deviceUuid: user.device_id || null,
+            userId: user.user_id || null,
+            provider: "grok",
+            sessionId: null,
+        });
 
         grokWs.send(
             JSON.stringify({
@@ -130,7 +149,13 @@ export const connectToGrok = async ({
 
                 case "conversation.item.input_audio_transcription.completed":
                     if (typeof event.transcript === "string" && event.transcript.length > 0) {
-                        await addConversation(supabase, "user", event.transcript, user);
+                        // Get pending input usage for this message
+                        const userUsage = usageTracker.getPendingUsage(deviceId, "user");
+                        await addConversation(supabase, "user", event.transcript, user, userUsage ? {
+                            usageLogId: userUsage.usageLogId,
+                            audioDurationMs: userUsage.audioDurationMs,
+                            audioBytes: userUsage.audioBytes,
+                        } : undefined);
                         ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.USER", text: event.transcript }));
                     }
                     break;
@@ -144,7 +169,13 @@ export const connectToGrok = async ({
                     opus.flush(true);
 
                     if (outputTranscript) {
-                        await addConversation(supabase, "assistant", outputTranscript, user);
+                        // Get pending output usage for this message
+                        const assistantUsage = usageTracker.getPendingUsage(deviceId, "assistant");
+                        await addConversation(supabase, "assistant", outputTranscript, user, assistantUsage ? {
+                            usageLogId: assistantUsage.usageLogId,
+                            audioDurationMs: assistantUsage.audioDurationMs,
+                            audioBytes: assistantUsage.audioBytes,
+                        } : undefined);
                         ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.ASSISTANT", text: outputTranscript }));
                         outputTranscript = "";
                     }
@@ -175,6 +206,9 @@ export const connectToGrok = async ({
 
     const messageHandler = async (data: RawData, isBinary: boolean) => {
         if (isBinary) {
+            // Track input audio usage (20ms per Opus frame)
+            usageTracker.addAudioInput(deviceId, (data as Buffer).length, 20);
+
             // Decode Opus to PCM (16kHz) from ESP32
             try {
                 const pcmData = inputDecoder.decode(data as Buffer);
@@ -224,6 +258,12 @@ export const connectToGrok = async ({
 
     ws.on("close", async (code: number, reason: string) => {
         console.log(`ESP32 WebSocket closed with code ${code}, reason: ${reason}`);
+
+        // End usage tracking session
+        if (usageLogId) {
+            await usageTracker.endSession(supabase, deviceId);
+        }
+
         await closeHandler();
         opus.close();
         grokWs.close();

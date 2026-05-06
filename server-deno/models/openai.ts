@@ -4,6 +4,7 @@ import { RealtimeClient } from "../realtime/client.js";
 import { RealtimeUtils } from "../realtime/utils.js";
 import { addConversation, getDeviceInfo } from "../supabase.ts";
 import { createOpusPacketizer, createOpusDecoder, isDev, openaiApiKey, defaultOpenAIVoice } from "../utils.ts";
+import { usageTracker } from "../usage-tracker.ts";
 
 const sendFirstMessage = (client: RealtimeClient, firstMessage: string) => {
     const event = {
@@ -37,7 +38,15 @@ export const connectToOpenAI = async ({
 }: ProviderArgs) => {
     const { user, supabase } = payload;
 
-    const opus = createOpusPacketizer((packet) => ws.send(packet));
+    // Get device ID for usage tracking
+    const deviceId = user.device?.mac_address || user.device_id || "unknown";
+    let usageLogId: string | null = null;
+
+    const opus = createOpusPacketizer((packet) => {
+        // Track output audio usage (20ms per Opus frame)
+        usageTracker.addAudioOutput(deviceId, packet.length, 20);
+        ws.send(packet);
+    });
     const inputDecoder = createOpusDecoder();  // Decode 16kHz Opus from ESP32
 
     let currentItemId: string | null = null;
@@ -101,11 +110,18 @@ export const connectToOpenAI = async ({
             }
         } else if (event.type === "response.audio_transcript.done") {
             console.log("response.audio_transcript.done", event);
+            // Get pending output usage for this message
+            const assistantUsage = usageTracker.getPendingUsage(deviceId, "assistant");
             await addConversation(
                 supabase,
                 "assistant",
                 event.transcript,
                 user,
+                assistantUsage ? {
+                    usageLogId: assistantUsage.usageLogId,
+                    audioDurationMs: assistantUsage.audioDurationMs,
+                    audioBytes: assistantUsage.audioBytes,
+                } : undefined,
             );
             ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.ASSISTANT", text: event.transcript }));
         } else if (event.type === "input_audio_buffer.committed") {
@@ -181,11 +197,18 @@ export const connectToOpenAI = async ({
                         break;
                     case "conversation.item.input_audio_transcription.completed":
                         console.log("user transcription:", event);
+                        // Get pending input usage for this message
+                        const userUsage = usageTracker.getPendingUsage(deviceId, "user");
                         await addConversation(
                             supabase,
                             "user",
                             event.transcript,
                             user,
+                            userUsage ? {
+                                usageLogId: userUsage.usageLogId,
+                                audioDurationMs: userUsage.audioDurationMs,
+                                audioBytes: userUsage.audioBytes,
+                            } : undefined,
                         );
                         ws.send(JSON.stringify({ type: "server", msg: "TRANSCRIPT.USER", text: event.transcript }));
                         break;
@@ -212,6 +235,9 @@ export const connectToOpenAI = async ({
 
             // for esp32
             if (isBinary) {
+                // Track input audio usage (20ms per Opus frame)
+                usageTracker.addAudioInput(deviceId, data.length, 20);
+
                 // Decode Opus to PCM (16kHz) from ESP32
                 try {
                     const pcmData = inputDecoder.decode(data);
@@ -302,6 +328,12 @@ export const connectToOpenAI = async ({
     // Add more detailed close handling
     ws.on("close", async (code: number, reason: string) => {
         console.log(`WebSocket closed with code ${code}, reason: ${reason}`);
+
+        // End usage tracking session
+        if (usageLogId) {
+            await usageTracker.endSession(supabase, deviceId);
+        }
+
         await closeHandler();
         opus.close();
         client.disconnect();
@@ -316,6 +348,17 @@ export const connectToOpenAI = async ({
     // Connect to the OpenAI Realtime API
     try {
         console.log(`Connecting to OpenAI...`);
+
+        // Start usage tracking session
+        usageLogId = await usageTracker.startSession(supabase, {
+            deviceId,
+            deviceMac: user.device?.mac_address || null,
+            deviceUuid: user.device_id || null,
+            userId: user.user_id || null,
+            provider: "openai",
+            sessionId: null,
+        });
+
         const sessionOptions = {
             model: "gpt-realtime-1.5",
             turn_detection: {
@@ -331,6 +374,10 @@ export const connectToOpenAI = async ({
         await client.connect(sessionOptions as any);
     } catch (e: unknown) {
         console.log(`Error connecting to OpenAI: ${e as Error}`);
+        // End usage tracking on error
+        if (usageLogId) {
+            await usageTracker.endSession(supabase, deviceId);
+        }
         ws.close();
         return;
     }
