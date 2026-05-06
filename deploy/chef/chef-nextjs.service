@@ -1,0 +1,26 @@
+# ============================================================
+# Chef AI - Next.js Web App Service
+# Copy to: /etc/systemd/system/chef-nextjs.service
+# ============================================================
+
+[Unit]
+Description=Chef AI Next.js Web App
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/chef_ai/frontend-nextjs
+ExecStart=/usr/bin/node .next/standalone/server.js
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/chef_ai/logs/nextjs.log
+StandardError=append:/opt/chef_ai/logs/nextjs.log
+
+# Environment
+Environment=NODE_ENV=production
+Environment=HOSTNAME=127.0.0.1
+Environment=PORT=3001
+
+[Install]
+WantedBy=multi-user.target

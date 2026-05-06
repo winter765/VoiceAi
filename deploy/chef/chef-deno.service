@@ -1,0 +1,25 @@
+# ============================================================
+# Chef AI - Deno WebSocket Server Service
+# Copy to: /etc/systemd/system/chef-deno.service
+# ============================================================
+
+[Unit]
+Description=Chef AI Deno WebSocket Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/chef_ai/server-deno
+ExecStart=/root/.deno/bin/deno run -A --env-file=.env main.ts
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/chef_ai/logs/deno.log
+StandardError=append:/opt/chef_ai/logs/deno.log
+
+# Environment
+Environment=PORT=8081
+Environment=HOST=127.0.0.1
+
+[Install]
+WantedBy=multi-user.target
